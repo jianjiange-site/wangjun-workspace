@@ -1,0 +1,20 @@
+name: dating-app
+
+networks:
+  default:
+    external: true
+    name: dating-app
+
+services:
+  Loki:
+    image: grafana/loki:3.0.0
+    container_name: dating-loki
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "3100:3100"
+
+  Grafana:
+    image: grafana/grafana:11.0.0
+    container_name: dating-grafana
+    ports:
+      - "3000:3000"

@@ -1,0 +1,246 @@
+syntax = "proto3";
+
+package dating.user.v1;
+
+option java_multiple_files = true;
+option java_package = "com.dating.user.grpc.v1";
+option java_outer_classname = "UserServiceProto";
+
+service UserCommandService {
+  rpc QuickLogin(QuickLoginRequest) returns (LoginResponse);
+  rpc LoginWithPhone(LoginWithPhoneRequest) returns (LoginResponse);
+  rpc LoginWithThirdParty(LoginWithThirdPartyRequest) returns (LoginResponse);
+  rpc BindPhone(BindPhoneRequest) returns (BindIdentityResponse);
+  rpc BindThirdParty(BindThirdPartyRequest) returns (BindIdentityResponse);
+  rpc SubmitLivenessResult(SubmitLivenessResultRequest) returns (SubmitLivenessResultResponse);
+  rpc CompleteProfile(CompleteProfileRequest) returns (CompleteProfileResponse);
+  rpc UpdateBasicInfo(UpdateBasicInfoRequest) returns (UpdateBasicInfoResponse);
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+}
+
+service UserQueryService {
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+  rpc GetUserProfile(GetUserProfileRequest) returns (GetUserProfileResponse);
+  rpc BatchGetUsers(BatchGetUsersRequest) returns (BatchGetUsersResponse);
+}
+
+service SessionService {
+  rpc ValidateSession(ValidateSessionRequest) returns (ValidateSessionResponse);
+  rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
+}
+
+enum UserStatus {
+  USER_STATUS_UNSPECIFIED = 0;
+  USER_STATUS_PENDING_LIVENESS = 1;
+  USER_STATUS_PENDING_PROFILE = 2;
+  USER_STATUS_ACTIVE = 3;
+  USER_STATUS_SUSPENDED = 4;
+  USER_STATUS_DELETED = 5;
+}
+
+enum UserType {
+  USER_TYPE_UNSPECIFIED = 0;
+  USER_TYPE_REAL_PERSON = 1;
+  USER_TYPE_DIGITAL_HUMAN = 2;
+}
+
+enum Gender {
+  GENDER_UNSPECIFIED = 0;
+  GENDER_MALE = 1;
+  GENDER_FEMALE = 2;
+  GENDER_NON_BINARY = 3;
+}
+
+enum NextAction {
+  NEXT_ACTION_UNSPECIFIED = 0;
+  NEXT_ACTION_ENTER_APP = 1;
+  NEXT_ACTION_DO_LIVENESS = 2;
+  NEXT_ACTION_COMPLETE_PROFILE = 3;
+  NEXT_ACTION_ACCOUNT_SUSPENDED = 4;
+}
+
+enum IdentityType {
+  IDENTITY_TYPE_UNSPECIFIED = 0;
+  IDENTITY_TYPE_PHONE = 1;
+  IDENTITY_TYPE_THIRD_PARTY = 2;
+  IDENTITY_TYPE_QUICK = 3;
+}
+
+enum LivenessResult {
+  LIVENESS_RESULT_UNSPECIFIED = 0;
+  LIVENESS_RESULT_PASS = 1;
+  LIVENESS_RESULT_FAIL = 2;
+  LIVENESS_RESULT_REVIEW = 3;
+}
+
+message QuickLoginRequest {
+  string device_id = 1;
+  string install_id = 2;
+  string quick_login_token = 3;
+}
+
+message LoginWithPhoneRequest {
+  string phone_number = 1;
+  string verification_code = 2;
+  string request_id = 3;
+}
+
+message LoginWithThirdPartyRequest {
+  string provider = 1;
+  string provider_user_id = 2;
+  string request_id = 3;
+}
+
+message BindPhoneRequest {
+  string user_id = 1;
+  string phone_number = 2;
+  string verification_code = 3;
+}
+
+message BindThirdPartyRequest {
+  string user_id = 1;
+  string provider = 2;
+  string provider_user_id = 3;
+}
+
+message SubmitLivenessResultRequest {
+  string user_id = 1;
+  string provider = 2;
+  string provider_trace_id = 3;
+  LivenessResult result = 4;
+  double score = 5;
+  string failure_reason = 6;
+}
+
+message CompleteProfileRequest {
+  string user_id = 1;
+  string nickname = 2;
+  Gender gender = 3;
+  string birth_date = 4;
+  string avatar_media_id = 5;
+  string race = 6;
+  UserType user_type = 7;
+}
+
+message UpdateBasicInfoRequest {
+  string user_id = 1;
+  repeated string tags = 2;
+  string city = 3;
+  string bio = 4;
+  string occupation = 5;
+  int32 height_cm = 6;
+  int32 weight_kg = 7;
+  string education = 8;
+  string mbti = 9;
+}
+
+message LogoutRequest {
+  string user_id = 1;
+  string session_id = 2;
+}
+
+message GetUserRequest {
+  string user_id = 1;
+}
+
+message GetUserProfileRequest {
+  string user_id = 1;
+}
+
+message BatchGetUsersRequest {
+  repeated string user_ids = 1;
+}
+
+message ValidateSessionRequest {
+  string access_token = 1;
+}
+
+message RefreshTokenRequest {
+  string refresh_token = 1;
+}
+
+message LoginResponse {
+  string user_id = 1;
+  UserStatus status = 2;
+  NextAction next_action = 3;
+  string access_token = 4;
+  string refresh_token = 5;
+  int64 expires_in_seconds = 6;
+  bool is_new_user = 7;
+}
+
+message BindIdentityResponse {
+  string user_id = 1;
+  string identity_id = 2;
+  IdentityType identity_type = 3;
+}
+
+message SubmitLivenessResultResponse {
+  string user_id = 1;
+  string liveness_verification_id = 2;
+  UserStatus status = 3;
+  NextAction next_action = 4;
+}
+
+message CompleteProfileResponse {
+  string user_id = 1;
+  UserStatus status = 2;
+  NextAction next_action = 3;
+}
+
+message UpdateBasicInfoResponse {
+  string user_id = 1;
+  int64 updated_at_epoch_millis = 2;
+}
+
+message LogoutResponse {
+  bool success = 1;
+}
+
+message UserSummary {
+  string user_id = 1;
+  UserStatus status = 2;
+  UserType user_type = 3;
+}
+
+message UserProfile {
+  string user_id = 1;
+  string nickname = 2;
+  Gender gender = 3;
+  string birth_date = 4;
+  string avatar_media_id = 5;
+  string race = 6;
+  repeated string tags = 7;
+  string city = 8;
+  string bio = 9;
+  string occupation = 10;
+  int32 height_cm = 11;
+  int32 weight_kg = 12;
+  string education = 13;
+  string mbti = 14;
+}
+
+message GetUserResponse {
+  UserSummary user = 1;
+}
+
+message GetUserProfileResponse {
+  UserProfile profile = 1;
+}
+
+message BatchGetUsersResponse {
+  repeated UserSummary users = 1;
+}
+
+message ValidateSessionResponse {
+  bool valid = 1;
+  string user_id = 2;
+  string session_id = 3;
+}
+
+message RefreshTokenResponse {
+  string user_id = 1;
+  string access_token = 2;
+  string refresh_token = 3;
+  int64 expires_in_seconds = 4;
+}
