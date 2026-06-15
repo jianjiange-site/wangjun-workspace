@@ -1,0 +1,56 @@
+spring:
+  config:
+    import: optional:nacos:wangjun-post-service-dev.yaml
+  datasource:
+    url: jdbc:postgresql://38.76.188.242:5433/wangjun-dating-dev?stringtype=unspecified
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    hikari:
+      connection-init-sql: SET TIME ZONE 'UTC'
+      connection-timeout: 3000
+      validation-timeout: 3000
+      maximum-pool-size: 10
+  data:
+    redis:
+      host: 38.76.188.242
+      port: 6380
+      database: 0
+      timeout: 2s
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  cloud:
+    nacos:
+      server-addr: 38.76.188.242:8848
+      config:
+        enabled: true
+        namespace: wangjun-dev
+        file-extension: yaml
+      discovery:
+        enabled: true
+        namespace: wangjun-dev
+
+dating:
+  cache:
+    key-prefix: wangjun:
+  object-storage:
+    provider: s3
+    endpoint: https://minio-api.jianjiange.site
+    region: us-east-1
+    path-style-access: true
+    bucket: wangjun-dating
+    access-key: ${MINIO_ACCESS_KEY}
+    secret-key: ${MINIO_SECRET_KEY}
+    upload-url-ttl: 10m
+    temp-retention: 24h
+  grpc:
+    server-port: ${GRPC_SERVER_PORT:9091}
+    client-deadline: 3s
+    profile-service-name: ${PROFILE_GRPC_SERVICE_NAME:wangjun-profile-service}
+
+server:
+  port: ${SERVER_PORT:8081}
+
+grpc:
+  server:
+    port: ${GRPC_SERVER_PORT:9091}
