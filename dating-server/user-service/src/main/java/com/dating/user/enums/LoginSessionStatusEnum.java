@@ -1,6 +1,0 @@
-package com.dating.user.enums;
-
-public enum LoginSessionStatusEnum {
-    INIT, CREDENTIAL_VERIFIED, LIVENESS_REQUIRED, LIVENESS_PASSED,
-    LIVENESS_FAILED, PROFILE_REQUIRED, TOKEN_ISSUED, EXPIRED
-}
