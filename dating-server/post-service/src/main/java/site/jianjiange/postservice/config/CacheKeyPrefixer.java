@@ -26,6 +26,26 @@ public class CacheKeyPrefixer {
         if (key.startsWith(keyPrefix)) {
             return key;
         }
+        String servicePrefix = servicePrefix();
+        if (!servicePrefix.isEmpty() && key.startsWith(servicePrefix)) {
+            return keyPrefix + key.substring(servicePrefix.length());
+        }
         return keyPrefix + key;
+    }
+
+    /**
+     * 提取统一前缀中最后一段服务名前缀，用于兼容调用方传入 post:xxx 的场景。
+     *
+     * @return 服务名前缀，不存在时返回空字符串
+     */
+    private String servicePrefix() {
+        String normalizedPrefix = keyPrefix.endsWith(":")
+                ? keyPrefix.substring(0, keyPrefix.length() - 1)
+                : keyPrefix;
+        int index = normalizedPrefix.lastIndexOf(':');
+        if (index < 0 || index == normalizedPrefix.length() - 1) {
+            return "";
+        }
+        return normalizedPrefix.substring(index + 1) + ":";
     }
 }

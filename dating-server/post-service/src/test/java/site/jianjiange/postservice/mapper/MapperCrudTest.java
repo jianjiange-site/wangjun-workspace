@@ -53,8 +53,8 @@ class MapperCrudTest {
         assertThat(postMapper.selectList(new LambdaQueryWrapper<PostEntity>()
                 .eq(PostEntity::getAuthorId, 2001L)
                 .eq(PostEntity::getStatus, PostStatus.PUBLISHED)))
-                .extracting(PostEntity::getId)
-                .containsExactly(1001L);
+                .extracting(PostEntity::getPostNo)
+                .containsExactly(9001001L);
     }
 
     /**
@@ -65,6 +65,7 @@ class MapperCrudTest {
         OffsetDateTime now = OffsetDateTime.now();
         PostImageEntity image = new PostImageEntity();
         image.setId(2001L);
+        image.setImageNo(9002001L);
         image.setUserId(3001L);
         image.setBucket("wangjun-dating");
         image.setObjectKey("wangjun-tmp/post/3001/202606/image.jpg");
@@ -116,6 +117,7 @@ class MapperCrudTest {
         OffsetDateTime now = OffsetDateTime.now();
         CommentEntity comment = new CommentEntity();
         comment.setId(4001L);
+        comment.setCommentNo(9004001L);
         comment.setPostId(5001L);
         comment.setAuthorId(6001L);
         comment.setRootCommentId(4001L);
@@ -164,6 +166,7 @@ class MapperCrudTest {
         OffsetDateTime now = OffsetDateTime.now();
         PostEntity post = new PostEntity();
         post.setId(id);
+        post.setPostNo(9000000L + id);
         post.setAuthorId(authorId);
         post.setContent("hello post");
         post.setImageCount(0);
@@ -214,8 +217,8 @@ class MapperCrudTest {
         request.setOperationType(operationType);
         request.setClientRequestId(clientRequestId);
         request.setRequestHash("hash-" + clientRequestId);
-        request.setBizId(10001L);
-        request.setResponseSnapshot("{\"id\":10001}");
+        request.setBizNo(10001L);
+        request.setResponseSnapshot("{\"postNo\":10001}");
         request.setCreatedAt(now);
         request.setExpireAt(now.plusDays(1));
         return request;

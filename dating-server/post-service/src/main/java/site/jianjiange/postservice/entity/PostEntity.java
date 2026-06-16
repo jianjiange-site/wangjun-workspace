@@ -16,6 +16,7 @@ public class PostEntity {
 
     @TableId(type = IdType.ASSIGN_ID)
     private Long id;
+    private Long postNo;
     private Long authorId;
     private String content;
     private Integer imageCount;

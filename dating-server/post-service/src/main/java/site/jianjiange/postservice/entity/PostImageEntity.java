@@ -16,6 +16,7 @@ public class PostImageEntity {
 
     @TableId(type = IdType.ASSIGN_ID)
     private Long id;
+    private Long imageNo;
     private Long userId;
     private Long postId;
     private String bucket;

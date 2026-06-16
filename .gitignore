@@ -1,0 +1,7 @@
+.idea/
+.claude/
+ai-chat/
+proto/
+docker-compose.app.yml
+dating-server/docs/
+dating-server/.gitkeep

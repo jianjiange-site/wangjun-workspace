@@ -139,6 +139,8 @@ service -> client/storage/cache
 - 数据库连接设置 `SET TIME ZONE 'UTC'`，全系统按 UTC 存取时间，代码中不写死东八区。
 - 跨服务数据只通过 gRPC 获取，不跨库 JOIN，不直接读其他服务表。
 - MyBatis-Plus Mapper 保持单表访问；复杂查询先分别查表，再在 service/manager 层组合。
+- 各表 `id` 仅作为数据库技术主键，不具备业务含义，不在 gRPC 协议中直接暴露；对外业务标识统一使用明确命名的 `post_no`、`image_no`、`comment_no`。
+- 表内关系字段如 `post_id`、`root_comment_id`、`parent_comment_id` 引用数据库技术主键，仅用于服务内部持久化关系。
 
 ### post
 
@@ -147,6 +149,7 @@ service -> client/storage/cache
 核心字段：
 
 - `id`
+- `post_no`
 - `author_id`
 - `content`
 - `image_count`
@@ -164,6 +167,7 @@ service -> client/storage/cache
 - `idx_author_status_created(author_id, status, created_at desc)`
 - `idx_status_created(status, created_at desc)`
 - `idx_hot_window(status, published_at desc, like_count, comment_count)`
+- `uk_post_no(post_no)`
 
 说明：
 
@@ -178,8 +182,9 @@ service -> client/storage/cache
 核心字段：
 
 - `id`
+- `image_no`
 - `user_id`
-- `post_id`
+- `post_id`：内部技术主键外键
 - `bucket`
 - `object_key`
 - `content_type`
@@ -200,6 +205,7 @@ service -> client/storage/cache
 - `idx_user_status(user_id, status)`
 - `idx_temp_expire(status, upload_expire_at)`
 - `idx_post_sort(post_id, sort_order)`
+- `uk_post_image_no(image_no)`
 
 说明：
 
@@ -214,7 +220,7 @@ service -> client/storage/cache
 
 - `id`
 - `user_id`
-- `post_id`
+- `post_id`：内部技术主键外键
 - `post_author_id`
 - `created_at`
 
@@ -236,6 +242,7 @@ service -> client/storage/cache
 核心字段：
 
 - `id`
+- `comment_no`
 - `post_id`
 - `author_id`
 - `root_comment_id`
@@ -250,6 +257,7 @@ service -> client/storage/cache
 规则：
 
 - 一级评论：`level = 1`，`root_comment_id = id`。
+- `root_comment_id`、`parent_comment_id` 为内部技术主键关系；gRPC 入参出参使用 `comment_no`。
 - 二级回复：`level = 2`，挂到一级评论下。
 - 允许回复二级回复，但展示仍为两级。
 - 一级评论删除不级联删除回复。
@@ -265,7 +273,7 @@ service -> client/storage/cache
 - `operation_type`
 - `client_request_id`
 - `request_hash`
-- `biz_id`
+- `biz_no`
 - `response_snapshot`
 - `created_at`
 - `expire_at`
@@ -322,8 +330,8 @@ hoursSincePublished = 当前时间与 published_at 的小时差
 
 ### 点赞计数 delta
 
-- Key：`wangjun:post:like:delta:{postId}`
-- 回写临时 Key：`wangjun:post:like:flushing:{postId}`
+- Key：`wangjun:post:like:delta:{post_no}`
+- 回写临时 Key：`wangjun:post:like:flushing:{post_no}`
 - 点赞成功后 `INCR`
 - TTL：7 天，每次 `INCR` 后刷新；正常情况下会被回写任务清理，TTL 只作为兜底保护。
 - 展示计数：`post.like_count + redis_delta`
@@ -357,7 +365,7 @@ MVP 不启用 RocketMQ producer，只预留事件类和 topic 命名：
 
 - 事件在数据库事务提交后发送。
 - 发送失败不影响主业务。
-- 消费端按业务 ID 幂等。
+- 消费端按业务号幂等。
 - 需要补充重试、死信、补偿策略后再正式启用。
 - 开发环境 topic、producer group、consumer group 使用 `wangjun-dev-post-*` 前缀隔离。
 - RocketMQ AK/SK 只能放在 Nacos、环境变量或本机 profile，禁止提交到仓库。
@@ -368,9 +376,9 @@ MVP 不启用 RocketMQ producer，只预留事件类和 topic 命名：
 
 1. 客户端请求 `CreateImageUploadUrl`。
 2. Post 创建 `post_image` TEMP 记录。
-3. Post 返回 `image_id`、`object_key`、MinIO 预签名上传 URL。
+3. Post 返回 `image_no`、`object_key`、MinIO 预签名上传 URL。
 4. 客户端直传 MinIO。
-5. 发帖时提交 `image_id` 列表。
+5. 发帖时提交 `image_no` 列表。
 6. Post 校验图片归属、TEMP 状态、MinIO 对象存在、大小、content-type。
 7. 发帖事务内创建 post，并将图片置为 `BOUND`。
 8. 详情和 Feed 只返回图片 `object_key`，不返回也不存储完整 URL。
@@ -432,7 +440,7 @@ MediaService
 
 RPC 职责：
 
-- `CreatePost`：创建帖子，提交文本和当前用户自己的 TEMP `image_id` 列表。
+- `CreatePost`：创建帖子，提交文本和当前用户自己的 TEMP `image_no` 列表。
 - `DeletePost`：作者软删除自己的帖子。
 - `GetPost`：查询帖子详情，不可见帖子不返回。
 - `ListAuthorPosts`：按作者查询主页帖子列表。
@@ -442,17 +450,17 @@ RPC 职责：
 - `DeleteComment`：评论作者软删除自己的评论。
 - `ListPostComments`：分页查询帖子一级评论列表，可附带每条一级评论下的少量楼中楼预览。
 - `ListCommentReplies`：分页查询某个一级评论下的楼中楼回复列表，用于展开楼中楼。
-- `CreateImageUploadUrl`：为当前用户创建 TEMP 图片记录，并返回 MinIO 预签名上传 URL、`image_id`、`object_key`；客户端用它直传图片到 MinIO，Post 服务不承接图片文件流量。
-- `GetImageKeys`：按帖子或图片 ID 查询已绑定图片的 `object_key`，并校验调用者对帖子可见；用于详情、Feed 或主页场景拿到图片 key。它不返回完整 URL，访问 URL 由前端、网关或统一对象访问层按环境拼接或签发。
+- `CreateImageUploadUrl`：为当前用户创建 TEMP 图片记录，并返回 MinIO 预签名上传 URL、`image_no`、`object_key`；客户端用它直传图片到 MinIO，Post 服务不承接图片文件流量。
+- `GetImageKeys`：按帖子业务号或图片业务号查询已绑定图片的 `object_key`，并校验调用者对帖子可见；用于详情、Feed 或主页场景拿到图片 key。它不返回完整 URL，访问 URL 由前端、网关或统一对象访问层按环境拼接或签发。
 
 接口约束：
 
 - 写接口携带 `client_request_id`，点赞可依赖唯一约束幂等。
-- `CreatePost` 只接 `image_id`，不允许直接提交任意 objectKey。
+- `CreatePost` 只接 `image_no`，不允许直接提交任意 objectKey。
 - `ListPostComments` 只返回一级评论分页，楼中楼预览数量固定较小，例如每条一级评论最多 2 条。
-- `ListCommentReplies` 必须指定一级评论 `root_comment_id`，只返回该一级评论下的二级回复。
+- `ListCommentReplies` 必须指定一级评论 `root_comment_no`，只返回该一级评论下的二级回复。
 - `GetFeed` 使用服务端生成、签名、防篡改 cursor。
-- `GetImageKeys` 必须校验帖子可见性，不能任意 imageId 换 object key。
+- `GetImageKeys` 必须校验帖子可见性，不能任意 `image_no` 换 object key。
 - 如果部署策略要求私有桶短期访问 URL，由网关或统一对象访问层基于 `object_key` 签发，Post 业务表和核心 gRPC 协议仍以 key 为准。
 - pageSize 默认 20，最大 50。
 
@@ -461,7 +469,7 @@ Feed cursor 内容：
 - `anchor_time`
 - 三路来源最后排序位置
 - page size
-- 少量本次连续翻页已返回 postId
+- 少量本次连续翻页已返回 `post_no`
 - expireAt
 - signature
 
@@ -473,12 +481,12 @@ Feed cursor 内容：
 校验身份
 -> 校验文本/图片数量
 -> 幂等检查
--> 校验 image_id 归属和 TEMP
+-> 校验 image_no 归属和 TEMP
 -> MinIO statObject 校验真实上传
 -> 事务内创建 post、绑定图片、写幂等记录
 -> 事务提交
 -> 审核 adapter no-op 默认通过
--> 返回 post_id
+-> 返回 post_no
 ```
 
 ### 点赞流程
@@ -668,7 +676,7 @@ Feed 可靠性：
 - RocketMQ 不可用：MVP 本身不依赖 RocketMQ；后续启用事件发送后，MQ 失败不影响主业务提交，事件发送失败记录日志和指标，必要时通过数据库事实表补发。
 - 审核 SDK 不可用：MVP 使用 no-op 默认通过；后续接入真实审核后，SDK 调用失败时保持帖子当前可见性策略不变，并记录待审核补偿任务，不能在数据库事务内阻塞发帖。
 - Feed 候选不足：三路召回、异性过滤、去重、补位后仍不足 pageSize 时，返回实际数量，不额外放宽性别、状态、作者本人排除等规则。
-- 点赞计数回写失败：保留 Redis delta / flushing key，后续任务继续重试；如果 Redis 数据丢失，以 PostgreSQL `post_like` 关系表为准按 postId 重建 `like_count`。
+- 点赞计数回写失败：保留 Redis delta / flushing key，后续任务继续重试；如果 Redis 数据丢失，以 PostgreSQL `post_like` 关系表为准按 `post_no` 重建 `like_count`。
 
 ## 19. 可观测性设计
 
@@ -676,9 +684,9 @@ Feed 可靠性：
 
 - `request_id`
 - `user_id`
-- `post_id`
-- `comment_id`
-- `image_id`
+- `post_no`
+- `comment_no`
+- `image_no`
 - `operation`
 - `error_code`
 - `latency_ms`

@@ -4,6 +4,8 @@ spring:
     username: sa
     password:
     driver-class-name: org.h2.Driver
+    hikari:
+      connection-init-sql: SET TIME ZONE 'UTC'
   flyway:
     enabled: true
     init-sqls: CREATE DOMAIN IF NOT EXISTS TIMESTAMPTZ AS TIMESTAMP WITH TIME ZONE
@@ -13,6 +15,24 @@ spring:
         enabled: false
       discovery:
         enabled: false
+
+dating:
+  cache:
+    key-prefix: "wangjun:post:"
+  object-storage:
+    provider: s3
+    endpoint: http://localhost:9000
+    region: us-east-1
+    path-style-access: true
+    bucket: wangjun-dating
+    access-key: test-access-key
+    secret-key: test-secret-key
+    upload-url-ttl: 10m
+    temp-retention: 24h
+  grpc:
+    server-port: 9091
+    client-deadline: 3s
+    profile-service-name: wangjun-profile-service
 
 mybatis-plus:
   configuration:

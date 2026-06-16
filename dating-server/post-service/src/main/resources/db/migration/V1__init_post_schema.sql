@@ -1,5 +1,6 @@
 CREATE TABLE post (
     id BIGINT PRIMARY KEY,
+    post_no BIGINT NOT NULL,
     author_id BIGINT NOT NULL,
     content VARCHAR(2000) NOT NULL,
     image_count INTEGER NOT NULL DEFAULT 0,
@@ -14,7 +15,8 @@ CREATE TABLE post (
     CONSTRAINT ck_post_status CHECK (status IN ('PUBLISHED', 'USER_DELETED', 'AUDIT_REJECTED')),
     CONSTRAINT ck_post_image_count CHECK (image_count >= 0),
     CONSTRAINT ck_post_like_count CHECK (like_count >= 0),
-    CONSTRAINT ck_post_comment_count CHECK (comment_count >= 0)
+    CONSTRAINT ck_post_comment_count CHECK (comment_count >= 0),
+    CONSTRAINT uk_post_no UNIQUE (post_no)
 );
 
 CREATE INDEX idx_author_status_created ON post (author_id, status, created_at DESC);
@@ -23,6 +25,7 @@ CREATE INDEX idx_hot_window ON post (status, published_at DESC, like_count, comm
 
 CREATE TABLE post_image (
     id BIGINT PRIMARY KEY,
+    image_no BIGINT NOT NULL,
     user_id BIGINT NOT NULL,
     post_id BIGINT,
     bucket VARCHAR(128) NOT NULL,
@@ -41,7 +44,8 @@ CREATE TABLE post_image (
     updated_at TIMESTAMPTZ NOT NULL,
     CONSTRAINT ck_post_image_status CHECK (status IN ('TEMP', 'BOUND', 'CLEANING', 'CLEANED', 'DELETE_FAILED')),
     CONSTRAINT ck_post_image_size CHECK (size_bytes >= 0),
-    CONSTRAINT ck_post_image_retry_count CHECK (retry_count >= 0)
+    CONSTRAINT ck_post_image_retry_count CHECK (retry_count >= 0),
+    CONSTRAINT uk_post_image_no UNIQUE (image_no)
 );
 
 CREATE INDEX idx_user_status ON post_image (user_id, status);
@@ -62,6 +66,7 @@ CREATE INDEX idx_user_author_created ON post_like (user_id, post_author_id, crea
 
 CREATE TABLE comment (
     id BIGINT PRIMARY KEY,
+    comment_no BIGINT NOT NULL,
     post_id BIGINT NOT NULL,
     author_id BIGINT NOT NULL,
     root_comment_id BIGINT NOT NULL,
@@ -72,6 +77,7 @@ CREATE TABLE comment (
     status VARCHAR(32) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL,
     deleted_at TIMESTAMPTZ,
+    CONSTRAINT uk_comment_no UNIQUE (comment_no),
     CONSTRAINT ck_comment_level CHECK (level IN (1, 2)),
     CONSTRAINT ck_comment_status CHECK (status IN ('NORMAL', 'USER_DELETED'))
 );
@@ -86,7 +92,7 @@ CREATE TABLE idempotent_request (
     operation_type VARCHAR(64) NOT NULL,
     client_request_id VARCHAR(128) NOT NULL,
     request_hash VARCHAR(128) NOT NULL,
-    biz_id BIGINT,
+    biz_no BIGINT,
     response_snapshot TEXT,
     created_at TIMESTAMPTZ NOT NULL,
     expire_at TIMESTAMPTZ NOT NULL,

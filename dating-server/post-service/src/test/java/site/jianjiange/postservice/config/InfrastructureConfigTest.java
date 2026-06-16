@@ -46,7 +46,7 @@ class InfrastructureConfigTest {
         assertThat(dataSource).isInstanceOf(HikariDataSource.class);
         assertThat(((HikariDataSource) dataSource).getConnectionInitSql()).isEqualTo("SET TIME ZONE 'UTC'");
         assertThat(grpcConfig.profileServiceName()).isEqualTo("wangjun-profile-service");
-        assertThat(objectStorageProperties.bucket()).isEqualTo("dating-app");
+        assertThat(objectStorageProperties.bucket()).isEqualTo("wangjun-dating");
         assertThat(minioClient).isNotNull();
         assertThat(redisTemplate.getKeySerializer()).isNotNull();
         assertThat(redisTemplate.getValueSerializer()).isNotNull();

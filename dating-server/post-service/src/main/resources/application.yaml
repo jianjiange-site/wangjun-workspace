@@ -1,62 +1,24 @@
 spring:
   application:
     name: wangjun-post-service
-  datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:dating}?stringtype=unspecified
-    username: ${DB_USERNAME:dating}
-    password: ${DB_PASSWORD:dating}
-    driver-class-name: org.postgresql.Driver
-    hikari:
-      connection-init-sql: SET TIME ZONE 'UTC'
-      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:3000}
-      validation-timeout: ${DB_VALIDATION_TIMEOUT_MS:3000}
-      maximum-pool-size: ${DB_MAX_POOL_SIZE:10}
-  data:
-    redis:
-      host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
-      database: ${REDIS_DATABASE:0}
-      timeout: ${REDIS_TIMEOUT:2s}
-  flyway:
-    enabled: false
-    locations: classpath:db/migration
+
+  profiles:
+    active: dev
+
   cloud:
     nacos:
-      server-addr: ${NACOS_SERVER_ADDR:localhost:8848}
+      server-addr: ${NACOS_SERVER_ADDR:38.76.188.242:8848}
+      username: ${NACOS_USERNAME:nacos}
+      password: ${NACOS_PASSWORD:jianjiange}
       config:
-        enabled: false
-        namespace: ${NACOS_NAMESPACE:}
-        file-extension: yaml
+        enabled: true
+        namespace: ${NACOS_NAMESPACE:wangjun-dating-dev}
+        group: ${NACOS_GROUP:DEFAULT_GROUP}
+        file-extension: yml
       discovery:
-        enabled: false
-        namespace: ${NACOS_NAMESPACE:}
-
-mybatis-plus:
-  global-config:
-    db-config:
-      logic-delete-field: deleted
-      logic-delete-value: true
-      logic-not-delete-value: false
-  configuration:
-    map-underscore-to-camel-case: true
-
-dating:
-  cache:
-    key-prefix: ${CACHE_KEY_PREFIX:wangjun:}
-  object-storage:
-    provider: s3
-    endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
-    region: ${MINIO_REGION:us-east-1}
-    path-style-access: ${MINIO_PATH_STYLE_ACCESS:true}
-    bucket: ${MINIO_BUCKET:dating-app}
-    access-key: ${MINIO_ACCESS_KEY:minioadmin}
-    secret-key: ${MINIO_SECRET_KEY:minioadmin}
-    upload-url-ttl: ${MINIO_UPLOAD_URL_TTL:10m}
-    temp-retention: ${MINIO_TEMP_RETENTION:24h}
-  grpc:
-    server-port: ${GRPC_SERVER_PORT:9091}
-    client-deadline: ${GRPC_CLIENT_DEADLINE:3s}
-    profile-service-name: ${PROFILE_GRPC_SERVICE_NAME:wangjun-profile-service}
+        enabled: true
+        namespace: ${NACOS_NAMESPACE:wangjun-dating-dev}
+        group: ${NACOS_GROUP:DEFAULT_GROUP}
 
 server:
   port: ${SERVER_PORT:8081}
@@ -64,3 +26,10 @@ server:
 grpc:
   server:
     port: ${GRPC_SERVER_PORT:9091}
+---
+spring:
+  config:
+    activate:
+      on-profile: dev
+    import:
+      - optional:nacos:wangjun-post-service-dev.yml

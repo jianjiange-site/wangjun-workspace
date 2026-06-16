@@ -19,7 +19,7 @@ public class IdempotentRequestEntity {
     private String operationType;
     private String clientRequestId;
     private String requestHash;
-    private Long bizId;
+    private Long bizNo;
     private String responseSnapshot;
     private OffsetDateTime createdAt;
     private OffsetDateTime expireAt;
