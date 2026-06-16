@@ -9,16 +9,20 @@ import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import com.baomidou.mybatisplus.core.incrementer.IdentifierGenerator;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import site.jianjiange.postservice.entity.IdempotentRequestEntity;
 import site.jianjiange.postservice.entity.PostEntity;
 import site.jianjiange.postservice.entity.PostImageEntity;
 import site.jianjiange.postservice.enums.PostStatus;
 import site.jianjiange.postservice.exception.BusinessException;
 import site.jianjiange.postservice.exception.PostErrorCode;
+import site.jianjiange.postservice.manager.PostImageManager;
 import site.jianjiange.postservice.manager.PostManager;
 import site.jianjiange.postservice.service.command.CreatePostCommand;
 import site.jianjiange.postservice.service.result.CreatePostResult;
@@ -38,25 +42,34 @@ public class PostService {
 
     private final IdentifierGenerator identifierGenerator;
     private final PostManager postManager;
+    private final PostImageManager postImageManager;
+    private final TransactionTemplate transactionTemplate;
 
     /**
      * 创建帖子业务服务。
      *
      * @param identifierGenerator 业务号生成器
      * @param postManager 帖子数据管理器
+     * @param postImageManager 帖子图片管理器
+     * @param transactionTemplate 事务模板
      */
-    public PostService(IdentifierGenerator identifierGenerator, PostManager postManager) {
+    public PostService(
+            IdentifierGenerator identifierGenerator,
+            PostManager postManager,
+            PostImageManager postImageManager,
+            TransactionTemplate transactionTemplate) {
         this.identifierGenerator = identifierGenerator;
         this.postManager = postManager;
+        this.postImageManager = postImageManager;
+        this.transactionTemplate = transactionTemplate;
     }
 
     /**
-     * 创建帖子并绑定 TEMP 图片，同时写入幂等请求记录。
+     * 创建帖子并绑定 TEMP 图片，同时写入幂等请求记录；对象存储校验在数据库事务外完成。
      *
      * @param command 创建帖子命令
      * @return 创建帖子结果
      */
-    @Transactional
     public CreatePostResult createPost(CreatePostCommand command) {
         ValidCreatePostCommand validCommand = validateCreatePostCommand(command);
         String requestHash = hashCreatePostRequest(validCommand.content(), validCommand.imageNos());
@@ -69,12 +82,36 @@ public class PostService {
             return new CreatePostResult(existing.getBizNo(), true);
         }
 
+        try {
+            List<PostImageEntity> bindableImages = postImageManager.prepareBindableImages(
+                    validCommand.authorId(), validCommand.imageNos());
+            return Objects.requireNonNull(transactionTemplate.execute(status ->
+                    createPostInTransaction(validCommand, requestHash, bindableImages)));
+        } catch (DuplicateKeyException ex) {
+            return recoverConcurrentIdempotentResult(validCommand, requestHash, ex);
+        } catch (BusinessException ex) {
+            return recoverConcurrentIdempotentResult(validCommand, requestHash, ex);
+        }
+    }
+
+    /**
+     * 在数据库事务内创建帖子、绑定图片并写入幂等记录。
+     *
+     * @param validCommand 已校验的创建帖子命令
+     * @param requestHash 请求哈希
+     * @param bindableImages 已预校验的图片实体
+     * @return 创建帖子结果
+     */
+    private CreatePostResult createPostInTransaction(
+            ValidCreatePostCommand validCommand,
+            String requestHash,
+            List<PostImageEntity> bindableImages) {
         OffsetDateTime now = OffsetDateTime.now();
         PostEntity post = new PostEntity();
         post.setPostNo(nextBusinessNo(post));
         post.setAuthorId(validCommand.authorId());
         post.setContent(validCommand.content());
-        post.setImageCount(validCommand.imageNos().size());
+        post.setImageCount(bindableImages.size());
         post.setStatus(PostStatus.PUBLISHED);
         post.setLikeCount(0L);
         post.setCommentCount(0L);
@@ -83,7 +120,7 @@ public class PostService {
         post.setCreatedAt(now);
         post.setUpdatedAt(now);
         postManager.createPost(post);
-        postManager.bindTempImages(validCommand.authorId(), post.getId(), validCommand.imageNos(), now);
+        postImageManager.bindTempImages(validCommand.authorId(), post.getId(), bindableImages, now);
 
         IdempotentRequestEntity request = new IdempotentRequestEntity();
         request.setUserId(validCommand.authorId());
@@ -96,6 +133,29 @@ public class PostService {
         request.setExpireAt(now.plusDays(1));
         postManager.createIdempotentRequest(request);
         return new CreatePostResult(post.getPostNo(), false);
+    }
+
+    /**
+     * 处理并发重复创建时的幂等恢复；如果失败不是同一幂等请求导致，则继续抛出原异常。
+     *
+     * @param validCommand 已校验的创建帖子命令
+     * @param requestHash 请求哈希
+     * @param cause 原始异常
+     * @return 并发幂等恢复后的创建结果
+     */
+    private CreatePostResult recoverConcurrentIdempotentResult(
+            ValidCreatePostCommand validCommand,
+            String requestHash,
+            RuntimeException cause) {
+        IdempotentRequestEntity existing = postManager.findIdempotentRequest(
+                validCommand.authorId(), CREATE_POST_OPERATION, validCommand.clientRequestId());
+        if (existing == null) {
+            throw cause;
+        }
+        if (!requestHash.equals(existing.getRequestHash())) {
+            throw new BusinessException(PostErrorCode.IDEMPOTENT_CONFLICT, "幂等请求内容不一致");
+        }
+        return new CreatePostResult(existing.getBizNo(), true);
     }
 
     /**
@@ -133,7 +193,7 @@ public class PostService {
         if (post == null) {
             return Optional.empty();
         }
-        return Optional.of(toResult(post, postManager.listBoundImages(post.getId())));
+        return Optional.of(toResult(post, postImageManager.listBoundImages(post.getId())));
     }
 
     /**
@@ -151,7 +211,7 @@ public class PostService {
         if (posts.isEmpty()) {
             return List.of();
         }
-        Map<Long, List<PostImageEntity>> imagesByPostId = postManager.listBoundImagesByPostIds(
+        Map<Long, List<PostImageEntity>> imagesByPostId = postImageManager.listBoundImagesByPostIds(
                 posts.stream().map(PostEntity::getId).toList());
         return posts
                 .stream()

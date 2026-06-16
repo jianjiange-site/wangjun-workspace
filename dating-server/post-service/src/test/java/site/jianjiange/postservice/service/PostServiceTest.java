@@ -3,8 +3,11 @@ package site.jianjiange.postservice.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.isNull;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -17,8 +20,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import site.jianjiange.postservice.entity.IdempotentRequestEntity;
 import site.jianjiange.postservice.entity.PostEntity;
 import site.jianjiange.postservice.entity.PostImageEntity;
@@ -29,9 +34,13 @@ import site.jianjiange.postservice.exception.PostErrorCode;
 import site.jianjiange.postservice.mapper.IdempotentRequestMapper;
 import site.jianjiange.postservice.mapper.PostImageMapper;
 import site.jianjiange.postservice.mapper.PostMapper;
+import site.jianjiange.postservice.manager.PostManager;
 import site.jianjiange.postservice.service.command.CreatePostCommand;
 import site.jianjiange.postservice.service.result.CreatePostResult;
 import site.jianjiange.postservice.service.result.PostResult;
+import site.jianjiange.postservice.storage.ObjectMetadata;
+import site.jianjiange.postservice.storage.ObjectStorageClient;
+import site.jianjiange.postservice.storage.ObjectStorageObjectNotFoundException;
 
 /**
  * 帖子业务服务测试，覆盖阶段 4.1 的创建、删除、详情和作者列表。
@@ -49,6 +58,12 @@ class PostServiceTest {
     @SpyBean
     private PostImageMapper postImageMapper;
 
+    @SpyBean
+    private PostManager postManager;
+
+    @MockBean
+    private ObjectStorageClient objectStorageClient;
+
     @Autowired
     private IdempotentRequestMapper idempotentRequestMapper;
 
@@ -60,6 +75,10 @@ class PostServiceTest {
         idempotentRequestMapper.delete(new QueryWrapper<>());
         postImageMapper.delete(new QueryWrapper<>());
         postMapper.delete(new QueryWrapper<>());
+        doAnswer(invocation -> {
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            return new ObjectMetadata("image/jpeg", 1024L, "etag-test");
+        }).when(objectStorageClient).statObject(any(), any());
     }
 
     /**
@@ -112,6 +131,50 @@ class PostServiceTest {
     }
 
     /**
+     * 验证并发重复创建在幂等记录唯一约束冲突后，会恢复为幂等成功。
+     */
+    @Test
+    void createPostRecoversDuplicateRequestAfterIdempotentInsertConflict() {
+        CreatePostCommand command = new CreatePostCommand(9001L, "hello post", List.of(), "req-create-race-1");
+        CreatePostResult first = postService.createPost(command);
+        doReturn(null)
+                .doCallRealMethod()
+                .when(postManager)
+                .findIdempotentRequest(9001L, "CREATE_POST", "req-create-race-1");
+
+        CreatePostResult second = postService.createPost(command);
+
+        assertThat(second.postNo()).isEqualTo(first.postNo());
+        assertThat(second.duplicated()).isTrue();
+        assertThat(postMapper.selectCount(new QueryWrapper<>())).isEqualTo(1);
+    }
+
+    /**
+     * 验证并发重复创建在图片已被第一次请求绑定后，会恢复为幂等成功。
+     */
+    @Test
+    void createPostRecoversDuplicateRequestAfterImageAlreadyBound() {
+        insertTempImage(7901L, 9001L);
+        CreatePostCommand command = new CreatePostCommand(
+                9001L, "hello post", List.of(7901L), "req-create-race-image-1");
+        CreatePostResult first = postService.createPost(command);
+        doReturn(null)
+                .doCallRealMethod()
+                .when(postManager)
+                .findIdempotentRequest(9001L, "CREATE_POST", "req-create-race-image-1");
+
+        CreatePostResult second = postService.createPost(command);
+
+        assertThat(second.postNo()).isEqualTo(first.postNo());
+        assertThat(second.duplicated()).isTrue();
+        assertThat(postMapper.selectCount(new QueryWrapper<>())).isEqualTo(1);
+        assertThat(postImageMapper.selectList(new LambdaQueryWrapper<PostImageEntity>()
+                .eq(PostImageEntity::getImageNo, 7901L)))
+                .extracting(PostImageEntity::getStatus)
+                .containsExactly(ImageStatus.BOUND);
+    }
+
+    /**
      * 验证同一幂等请求号对应不同请求内容时拒绝处理。
      */
     @Test
@@ -139,6 +202,95 @@ class PostServiceTest {
 
         assertThat(postMapper.selectCount(new QueryWrapper<>())).isZero();
         assertThat(idempotentRequestMapper.selectCount(new QueryWrapper<>())).isZero();
+    }
+
+    /**
+     * 验证发帖不能绑定其他用户的 TEMP 图片。
+     */
+    @Test
+    void createPostRejectsImageOwnedByOtherUser() {
+        insertTempImage(7401L, 9002L);
+
+        assertThatThrownBy(() -> postService.createPost(
+                new CreatePostCommand(9001L, "hello post", List.of(7401L), "req-image-owner-1")))
+                .isInstanceOfSatisfying(BusinessException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(PostErrorCode.IMAGE_FORBIDDEN));
+
+        assertThat(postMapper.selectCount(new QueryWrapper<>())).isZero();
+    }
+
+    /**
+     * 验证发帖不能绑定已经不是 TEMP 状态的图片。
+     */
+    @Test
+    void createPostRejectsNonTempImage() {
+        insertTempImage(7501L, 9001L);
+        PostImageEntity image = selectImageByNo(7501L);
+        image.setStatus(ImageStatus.BOUND);
+        image.setPostId(12345L);
+        postImageMapper.updateById(image);
+
+        assertThatThrownBy(() -> postService.createPost(
+                new CreatePostCommand(9001L, "hello post", List.of(7501L), "req-image-status-1")))
+                .isInstanceOfSatisfying(BusinessException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(PostErrorCode.IMAGE_STATUS_INVALID));
+
+        assertThat(postMapper.selectCount(new QueryWrapper<>())).isZero();
+    }
+
+    /**
+     * 验证对象存储中不存在的图片不能被绑定到帖子。
+     */
+    @Test
+    void createPostRejectsImageMissingInObjectStorage() {
+        insertTempImage(7601L, 9001L);
+        doThrow(new ObjectStorageObjectNotFoundException("missing", null))
+                .when(objectStorageClient)
+                .statObject(eq("wangjun-dating"), eq("wangjun-tmp/post/9001/7601.jpg"));
+
+        assertThatThrownBy(() -> postService.createPost(
+                new CreatePostCommand(9001L, "hello post", List.of(7601L), "req-image-upload-1")))
+                .isInstanceOfSatisfying(BusinessException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(PostErrorCode.IMAGE_NOT_UPLOADED));
+
+        assertThat(postMapper.selectCount(new QueryWrapper<>())).isZero();
+        assertThat(idempotentRequestMapper.selectCount(new QueryWrapper<>())).isZero();
+    }
+
+    /**
+     * 验证对象存储中的非法图片类型不能被绑定到帖子。
+     */
+    @Test
+    void createPostRejectsInvalidObjectContentType() {
+        insertTempImage(7701L, 9001L);
+        doReturn(new ObjectMetadata("text/plain", 1024L, "etag-plain"))
+                .when(objectStorageClient)
+                .statObject(eq("wangjun-dating"), eq("wangjun-tmp/post/9001/7701.jpg"));
+
+        assertThatThrownBy(() -> postService.createPost(
+                new CreatePostCommand(9001L, "hello post", List.of(7701L), "req-image-type-1")))
+                .isInstanceOfSatisfying(BusinessException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(PostErrorCode.IMAGE_CONTENT_TYPE_INVALID));
+
+        assertThat(postMapper.selectCount(new QueryWrapper<>())).isZero();
+    }
+
+    /**
+     * 验证对象存储中的图片大小与 TEMP 记录不一致时不能绑定。
+     */
+    @Test
+    void createPostRejectsMismatchedObjectSize() {
+        insertTempImage(7801L, 9001L);
+        doReturn(new ObjectMetadata("image/jpeg", 2048L, "etag-size"))
+                .when(objectStorageClient)
+                .statObject(eq("wangjun-dating"), eq("wangjun-tmp/post/9001/7801.jpg"));
+
+        assertThatThrownBy(() -> postService.createPost(
+                new CreatePostCommand(9001L, "hello post", List.of(7801L), "req-image-size-1")))
+                .isInstanceOfSatisfying(BusinessException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(PostErrorCode.IMAGE_NOT_UPLOADED));
+
+        assertThat(postMapper.selectCount(new QueryWrapper<>())).isZero();
     }
 
     /**
@@ -241,6 +393,17 @@ class PostServiceTest {
     private PostEntity selectByPostNo(Long postNo) {
         return postMapper.selectOne(new LambdaQueryWrapper<PostEntity>()
                 .eq(PostEntity::getPostNo, postNo));
+    }
+
+    /**
+     * 按图片业务号查询图片实体。
+     *
+     * @param imageNo 图片业务号
+     * @return 图片实体
+     */
+    private PostImageEntity selectImageByNo(Long imageNo) {
+        return postImageMapper.selectOne(new LambdaQueryWrapper<PostImageEntity>()
+                .eq(PostImageEntity::getImageNo, imageNo));
     }
 
     /**
