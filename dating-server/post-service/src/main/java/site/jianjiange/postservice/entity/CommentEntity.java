@@ -17,7 +17,7 @@ public class CommentEntity {
     @TableId(type = IdType.ASSIGN_ID)
     private Long id;
     private Long commentNo;
-    private Long postId;
+    private Long postNo;
     private Long authorId;
     private Long rootCommentId;
     private Long parentCommentId;

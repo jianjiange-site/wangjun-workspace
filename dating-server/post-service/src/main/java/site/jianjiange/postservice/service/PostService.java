@@ -13,9 +13,12 @@ import java.util.Objects;
 import java.util.Optional;
 import com.baomidou.mybatisplus.core.incrementer.IdentifierGenerator;
 import org.springframework.dao.DuplicateKeyException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
+import site.jianjiange.postservice.cache.LikeCountCache;
 import site.jianjiange.postservice.entity.IdempotentRequestEntity;
 import site.jianjiange.postservice.entity.PostEntity;
 import site.jianjiange.postservice.entity.PostImageEntity;
@@ -35,6 +38,7 @@ import site.jianjiange.postservice.service.result.PostResult;
 @Service
 public class PostService {
 
+    private static final Logger log = LoggerFactory.getLogger(PostService.class);
     private static final String CREATE_POST_OPERATION = "CREATE_POST";
     private static final int MAX_IMAGE_COUNT = 9;
     private static final int MAX_CONTENT_LENGTH = 2000;
@@ -43,6 +47,7 @@ public class PostService {
     private final IdentifierGenerator identifierGenerator;
     private final PostManager postManager;
     private final PostImageManager postImageManager;
+    private final LikeCountCache likeCountCache;
     private final TransactionTemplate transactionTemplate;
 
     /**
@@ -51,16 +56,19 @@ public class PostService {
      * @param identifierGenerator 业务号生成器
      * @param postManager 帖子数据管理器
      * @param postImageManager 帖子图片管理器
+     * @param likeCountCache 点赞计数缓存
      * @param transactionTemplate 事务模板
      */
     public PostService(
             IdentifierGenerator identifierGenerator,
             PostManager postManager,
             PostImageManager postImageManager,
+            LikeCountCache likeCountCache,
             TransactionTemplate transactionTemplate) {
         this.identifierGenerator = identifierGenerator;
         this.postManager = postManager;
         this.postImageManager = postImageManager;
+        this.likeCountCache = likeCountCache;
         this.transactionTemplate = transactionTemplate;
     }
 
@@ -120,7 +128,7 @@ public class PostService {
         post.setCreatedAt(now);
         post.setUpdatedAt(now);
         postManager.createPost(post);
-        postImageManager.bindTempImages(validCommand.authorId(), post.getId(), bindableImages, now);
+        postImageManager.bindTempImages(validCommand.authorId(), post.getPostNo(), bindableImages, now);
 
         IdempotentRequestEntity request = new IdempotentRequestEntity();
         request.setUserId(validCommand.authorId());
@@ -175,7 +183,7 @@ public class PostService {
         if (!operatorId.equals(post.getAuthorId())) {
             throw new BusinessException(PostErrorCode.POST_FORBIDDEN, "只能删除自己的帖子");
         }
-        if (!postManager.softDeletePost(post.getId(), OffsetDateTime.now())) {
+        if (!postManager.softDeletePost(post.getPostNo(), OffsetDateTime.now())) {
             throw new BusinessException(PostErrorCode.POST_NOT_FOUND, "帖子不存在");
         }
     }
@@ -193,7 +201,10 @@ public class PostService {
         if (post == null) {
             return Optional.empty();
         }
-        return Optional.of(toResult(post, postImageManager.listBoundImages(post.getId())));
+        return Optional.of(toResult(
+                post,
+                postImageManager.listBoundImages(post.getPostNo()),
+                readPendingLikeDelta(post.getPostNo())));
     }
 
     /**
@@ -211,11 +222,15 @@ public class PostService {
         if (posts.isEmpty()) {
             return List.of();
         }
-        Map<Long, List<PostImageEntity>> imagesByPostId = postImageManager.listBoundImagesByPostIds(
-                posts.stream().map(PostEntity::getId).toList());
+        Map<Long, List<PostImageEntity>> imagesByPostNo = postImageManager.listBoundImagesByPostNos(
+                posts.stream().map(PostEntity::getPostNo).toList());
+        Map<Long, Long> pendingLikeDeltas = readPendingLikeDeltas(posts);
         return posts
                 .stream()
-                .map(post -> toResult(post, imagesByPostId.getOrDefault(post.getId(), List.of())))
+                .map(post -> toResult(
+                        post,
+                        imagesByPostNo.getOrDefault(post.getPostNo(), List.of()),
+                        pendingLikeDeltas.getOrDefault(post.getPostNo(), 0L)))
                 .toList();
     }
 
@@ -225,22 +240,58 @@ public class PostService {
      *
      * @param post 帖子实体
      * @param images 帖子图片列表
+     * @param pendingLikeDelta 待回写点赞增量
      * @return 帖子业务结果
      */
-    private PostResult toResult(PostEntity post, List<PostImageEntity> images) {
+    private PostResult toResult(PostEntity post, List<PostImageEntity> images, long pendingLikeDelta) {
         List<PostImageResult> imageResults = images.stream()
                 .map(this::toImageResult)
                 .toList();
+        long likeCount = (post.getLikeCount() == null ? 0L : post.getLikeCount()) + pendingLikeDelta;
         return new PostResult(
                 post.getPostNo(),
                 post.getAuthorId(),
                 post.getContent(),
                 post.getImageCount(),
                 post.getStatus(),
-                post.getLikeCount(),
+                likeCount,
                 post.getCommentCount(),
                 post.getPublishedAt(),
                 imageResults);
+    }
+
+    /**
+     * 读取单个帖子的待回写点赞增量；Redis 异常时退回数据库基准计数。
+     *
+     * @param postNo 帖子业务号
+     * @return 待回写点赞增量
+     */
+    private long readPendingLikeDelta(Long postNo) {
+        try {
+            return likeCountCache.readLikeDelta(postNo);
+        } catch (RuntimeException ex) {
+            log.warn("读取点赞 Redis delta 失败，postNo={}, errorType={}, errorMessage={}",
+                    postNo, ex.getClass().getSimpleName(), ex.getMessage());
+            return 0L;
+        }
+    }
+
+    /**
+     * 批量读取帖子待回写点赞增量；Redis 异常时退回数据库基准计数。
+     *
+     * @param posts 帖子列表
+     * @return 以帖子业务号为 key 的待回写点赞增量
+     */
+    private Map<Long, Long> readPendingLikeDeltas(List<PostEntity> posts) {
+        try {
+            Map<Long, Long> pendingLikeDeltas = likeCountCache.readLikeDeltas(
+                    posts.stream().map(PostEntity::getPostNo).toList());
+            return pendingLikeDeltas == null ? Map.of() : pendingLikeDeltas;
+        } catch (RuntimeException ex) {
+            log.warn("批量读取点赞 Redis delta 失败，postCount={}, errorType={}, errorMessage={}",
+                    posts.size(), ex.getClass().getSimpleName(), ex.getMessage());
+            return Map.of();
+        }
     }
 
     /**

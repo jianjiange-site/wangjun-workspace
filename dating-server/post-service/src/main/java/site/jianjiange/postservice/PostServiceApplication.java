@@ -3,11 +3,13 @@ package site.jianjiange.postservice;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.mybatis.spring.annotation.MapperScan;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * Post 服务启动入口，负责加载 Spring Boot 应用上下文并扫描 MyBatis-Plus Mapper。
  */
 @SpringBootApplication
+@EnableScheduling
 @MapperScan("site.jianjiange.postservice.mapper")
 public class PostServiceApplication {
 

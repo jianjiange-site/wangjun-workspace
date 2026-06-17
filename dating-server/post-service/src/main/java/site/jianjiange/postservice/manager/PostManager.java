@@ -106,13 +106,13 @@ public class PostManager {
     /**
      * 将帖子软删除为用户删除状态。
      *
-     * @param postId 帖子技术主键
+     * @param postNo 帖子业务号
      * @param now 当前时间
      * @return 是否更新成功
      */
-    public boolean softDeletePost(Long postId, OffsetDateTime now) {
+    public boolean softDeletePost(Long postNo, OffsetDateTime now) {
         return postMapper.update(null, new LambdaUpdateWrapper<PostEntity>()
-                .eq(PostEntity::getId, postId)
+                .eq(PostEntity::getPostNo, postNo)
                 .eq(PostEntity::getStatus, PostStatus.PUBLISHED)
                 .set(PostEntity::getStatus, PostStatus.USER_DELETED)
                 .set(PostEntity::getDeletedAt, now)

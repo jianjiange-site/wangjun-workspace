@@ -16,6 +16,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,6 +25,7 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import site.jianjiange.postservice.cache.LikeCountCache;
 import site.jianjiange.postservice.entity.IdempotentRequestEntity;
 import site.jianjiange.postservice.entity.PostEntity;
 import site.jianjiange.postservice.entity.PostImageEntity;
@@ -64,6 +66,9 @@ class PostServiceTest {
     @MockBean
     private ObjectStorageClient objectStorageClient;
 
+    @MockBean
+    private LikeCountCache likeCountCache;
+
     @Autowired
     private IdempotentRequestMapper idempotentRequestMapper;
 
@@ -99,7 +104,7 @@ class PostServiceTest {
         assertThat(post.getContent()).isEqualTo("hello post");
         assertThat(post.getImageCount()).isEqualTo(2);
         assertThat(postImageMapper.selectList(new LambdaQueryWrapper<PostImageEntity>()
-                .eq(PostImageEntity::getPostId, post.getId())
+                .eq(PostImageEntity::getPostNo, post.getPostNo())
                 .orderByAsc(PostImageEntity::getSortOrder)))
                 .extracting(PostImageEntity::getImageNo)
                 .containsExactly(7001L, 7002L);
@@ -109,7 +114,7 @@ class PostServiceTest {
                 .extracting(IdempotentRequestEntity::getBizNo)
                 .containsExactly(result.postNo());
         assertThat(postImageMapper.selectList(new LambdaQueryWrapper<PostImageEntity>()
-                .eq(PostImageEntity::getPostId, post.getId())))
+                .eq(PostImageEntity::getPostNo, post.getPostNo())))
                 .extracting(PostImageEntity::getStatus)
                 .containsExactly(ImageStatus.BOUND, ImageStatus.BOUND);
     }
@@ -227,7 +232,7 @@ class PostServiceTest {
         insertTempImage(7501L, 9001L);
         PostImageEntity image = selectImageByNo(7501L);
         image.setStatus(ImageStatus.BOUND);
-        image.setPostId(12345L);
+        image.setPostNo(12345L);
         postImageMapper.updateById(image);
 
         assertThatThrownBy(() -> postService.createPost(
@@ -329,6 +334,49 @@ class PostServiceTest {
         assertThat(postService.listAuthorPosts(9001L, 20))
                 .extracting(result -> result.postNo())
                 .containsExactly(second.postNo());
+    }
+
+    /**
+     * 验证帖子详情会叠加 Redis 中尚未回写的点赞 delta。
+     */
+    @Test
+    void getPostDetailAddsPendingRedisLikeDelta() {
+        CreatePostResult result = postService.createPost(
+                new CreatePostCommand(9001L, "hello post", List.of(), "req-like-delta-detail-1"));
+        PostEntity post = selectByPostNo(result.postNo());
+        post.setLikeCount(4L);
+        postMapper.updateById(post);
+        doReturn(6L).when(likeCountCache).readLikeDelta(result.postNo());
+
+        PostResult detail = postService.getPostDetail(result.postNo()).orElseThrow();
+
+        assertThat(detail.likeCount()).isEqualTo(10L);
+    }
+
+    /**
+     * 验证作者帖子列表批量叠加 Redis 中尚未回写的点赞 delta。
+     */
+    @Test
+    void listAuthorPostsAddsPendingRedisLikeDeltasInBatch() {
+        CreatePostResult first = postService.createPost(
+                new CreatePostCommand(9001L, "first post", List.of(), "req-like-delta-list-1"));
+        CreatePostResult second = postService.createPost(
+                new CreatePostCommand(9001L, "second post", List.of(), "req-like-delta-list-2"));
+        PostEntity firstPost = selectByPostNo(first.postNo());
+        firstPost.setLikeCount(1L);
+        postMapper.updateById(firstPost);
+        PostEntity secondPost = selectByPostNo(second.postNo());
+        secondPost.setLikeCount(2L);
+        postMapper.updateById(secondPost);
+        doReturn(Map.of(first.postNo(), 3L, second.postNo(), 5L))
+                .when(likeCountCache)
+                .readLikeDeltas(any());
+
+        List<PostResult> posts = postService.listAuthorPosts(9001L, 20);
+
+        assertThat(findPostResult(posts, first.postNo()).likeCount()).isEqualTo(4L);
+        assertThat(findPostResult(posts, second.postNo()).likeCount()).isEqualTo(7L);
+        verify(likeCountCache, times(1)).readLikeDeltas(any());
     }
 
     /**

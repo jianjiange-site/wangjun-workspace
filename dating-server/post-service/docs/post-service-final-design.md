@@ -19,10 +19,10 @@ RocketMQ 和第三方审核 SDK 仅预留，不作为 MVP 必须实现。
 核心规则：
 
 - Feed 不抽离，不做复杂推荐，只做简单内容列表。
-- Feed 来源为热门、点赞过作者、新帖，比例 `4:3:3`。
+- Feed 来源为热门、喜欢过的人、新帖，比例 `4:3:3`；喜欢过的人 ID 从 user-service 获取。
 - 只推荐异性作者，性别来自 User/Profile 服务。
-- 点赞只支持点赞，不支持取消；重复点赞幂等成功。
-- 点赞关系落 PostgreSQL，点赞计数用 Redis 增量缓冲并定时回写。
+- 点赞只支持点赞，不支持取消；同一用户对同一帖子仅在 Redis TTL 窗口内去重，TTL 过后可再次点赞并重新计数。
+- 点赞请求链路先写 Redis，Redis 负责 TTL 去重和实时计数 delta；后台任务只回写 PostgreSQL `post.like_count`，点赞关系不落库。
 - 评论支持两级楼中楼。
 - 图片由 Post 服务生成 MinIO 预签名上传 URL，客户端直传；业务入库和接口出参只使用 `object_key`，不存完整 URL。
 
@@ -32,7 +32,7 @@ Post 服务负责：
 
 - 创建帖子、删除帖子、帖子详情、作者帖子列表。
 - 图片上传凭证、图片元数据、图片绑定、TEMP 图片清理。
-- 点赞关系、防重复点赞、点赞计数。
+- 点赞 TTL 去重、点赞计数。
 - 一级评论和楼中楼回复。
 - 简单 Feed 召回、异性过滤、去重、混排、cursor 分页。
 - 审核 SDK 适配器预留，MVP no-op 默认通过。
@@ -48,7 +48,7 @@ Post 服务不负责：
 
 数据归属：
 
-- Post 服务拥有 `post`、`post_image`、`post_like`、`comment`、`idempotent_request` 等数据。
+- Post 服务拥有 `post`、`post_image`、`comment`、`idempotent_request` 等数据；点赞关系只保存在 Redis TTL 去重 key 中，不落 PostgreSQL 关系表。
 - User/Profile 服务拥有用户资料和性别。
 - Post 禁止直接读 User/Profile 数据库，只能通过 gRPC 调用。
 
@@ -140,7 +140,7 @@ service -> client/storage/cache
 - 跨服务数据只通过 gRPC 获取，不跨库 JOIN，不直接读其他服务表。
 - MyBatis-Plus Mapper 保持单表访问；复杂查询先分别查表，再在 service/manager 层组合。
 - 各表 `id` 仅作为数据库技术主键，不具备业务含义，不在 gRPC 协议中直接暴露；对外业务标识统一使用明确命名的 `post_no`、`image_no`、`comment_no`。
-- 表内关系字段如 `post_id`、`root_comment_id`、`parent_comment_id` 引用数据库技术主键，仅用于服务内部持久化关系。
+- 帖子相关关系字段统一使用业务标识 `post_no`，不使用帖子技术主键做跨表关联；评论楼层内部字段 `root_comment_id`、`parent_comment_id` 仍仅在评论表内部使用。
 
 ### post
 
@@ -184,7 +184,7 @@ service -> client/storage/cache
 - `id`
 - `image_no`
 - `user_id`
-- `post_id`：内部技术主键外键
+- `post_no`：帖子业务号
 - `bucket`
 - `object_key`
 - `content_type`
@@ -204,7 +204,7 @@ service -> client/storage/cache
 
 - `idx_user_status(user_id, status)`
 - `idx_temp_expire(status, upload_expire_at)`
-- `idx_post_sort(post_id, sort_order)`
+- `idx_post_image_post_sort(post_no, sort_order)`
 - `uk_post_image_no(image_no)`
 
 说明：
@@ -212,28 +212,16 @@ service -> client/storage/cache
 - 发帖只允许绑定当前用户自己的 `TEMP` 图片。
 - 发帖绑定前必须通过 MinIO `statObject` 校验对象真实存在、大小和 content-type 合法。
 
-### post_like
+### 点赞关系
 
-用途：点赞关系、防重复点赞、Feed 的“点赞过作者”来源。
-
-核心字段：
-
-- `id`
-- `user_id`
-- `post_id`：内部技术主键外键
-- `post_author_id`
-- `created_at`
-
-约束和索引：
-
-- 唯一索引：`uk_user_post(user_id, post_id)`
-- `idx_user_created(user_id, created_at desc)`
-- `idx_user_author_created(user_id, post_author_id, created_at desc)`
+点赞关系不落 PostgreSQL，不再建立 `post_like` 表。Post 服务只持久化帖子维度的 `post.like_count` 基准计数。
 
 说明：
 
 - 不支持取消点赞。
-- 重复点赞命中唯一约束，对外返回成功，不增加计数。
+- 同一用户对同一帖子通过 Redis TTL key 去重，TTL 窗口内重复点赞返回成功但不增加计数。
+- TTL 过后同一用户可以再次点赞，视为新的点赞计数增量。
+- Feed 的“喜欢过的人”来源从 user-service 获取喜欢过的人 ID，不依赖 Post 服务点赞关系表。
 
 ### comment
 
@@ -243,7 +231,7 @@ service -> client/storage/cache
 
 - `id`
 - `comment_no`
-- `post_id`
+- `post_no`
 - `author_id`
 - `root_comment_id`
 - `parent_comment_id`
@@ -294,7 +282,7 @@ wangjun:{service}:{module}:{biz}:{id}
 
 Post 服务 Redis Key 必须统一使用 `wangjun:` 前缀，避免多服务共用 Redis 时发生 Key 污染。
 
-开发环境连接共享 Redis，默认使用 db `0`。所有 Redis Key 必须设置 TTL；普通缓存遵循“先写库，再删缓存”，不做数据库和缓存双写。点赞 delta 属于计数缓冲特例，以 PostgreSQL 点赞关系为准，并通过回写和修复任务保证最终一致。
+开发环境连接共享 Redis，默认使用 db `0`。普通缓存、点赞 delta 和点赞 TTL 去重 key 必须设置 TTL。普通缓存遵循“先写库，再删缓存”，不做数据库和缓存双写。点赞属于高频写特例，请求链路以 Redis 作为第一写入点，先完成 TTL 去重和实时计数，再由回写任务批量累加 PostgreSQL `post.like_count`。点赞关系不落 PostgreSQL。
 
 ### 用户性别缓存
 
@@ -330,12 +318,14 @@ hoursSincePublished = 当前时间与 published_at 的小时差
 
 ### 点赞计数 delta
 
+- 去重 Key：`wangjun:post:like:users:{post_no}:{user_id}`，使用 `SET NX EX` 表达用户-帖子维度 TTL 去重。
 - Key：`wangjun:post:like:delta:{post_no}`
 - 回写临时 Key：`wangjun:post:like:flushing:{post_no}`
-- 点赞成功后 `INCR`
-- TTL：7 天，每次 `INCR` 后刷新；正常情况下会被回写任务清理，TTL 只作为兜底保护。
-- 展示计数：`post.like_count + redis_delta`
-- Redis 不可用：点赞关系仍可落库，计数通过修复任务补偿。
+- 点赞成功后通过 Redis Lua 原子执行：`SET NX EX` TTL 去重和 `INCR` delta，作为前台可见点赞数的实时增量。
+- TTL：7 天；去重 key 到期后同一用户可再次点赞，delta 正常情况下会被回写任务清理，TTL 只作为兜底保护。
+- 展示计数：详情、作者列表和 Feed 热度计算均使用 `post.like_count + redis_delta`；Redis 读失败时退回 PostgreSQL 基准值。
+- 定时任务扫描 `like:delta:*`，先将 delta 原子转移为 flushing key，再按 flushing delta 累加 `post.like_count`。
+- Redis 不可用：点赞请求失败并提示稍后重试，不退回同步写 PostgreSQL，避免高峰流量压垮数据库。
 
 ### Feed 短期缓存
 
@@ -455,7 +445,7 @@ RPC 职责：
 
 接口约束：
 
-- 写接口携带 `client_request_id`，点赞可依赖唯一约束幂等。
+- 写接口携带 `client_request_id`，点赞依赖 Redis TTL 去重保证幂等。
 - `CreatePost` 只接 `image_no`，不允许直接提交任意 objectKey。
 - `ListPostComments` 只返回一级评论分页，楼中楼预览数量固定较小，例如每条一级评论最多 2 条。
 - `ListCommentReplies` 必须指定一级评论 `root_comment_no`，只返回该一级评论下的二级回复。
@@ -494,10 +484,11 @@ Feed cursor 内容：
 ```text
 校验身份
 -> 校验帖子存在且 PUBLISHED
--> 插入 post_like
--> 唯一冲突则幂等成功
--> 插入成功后 Redis INCR like delta
--> Redis 失败则记录修复标记或等待重建任务修复
+-> Redis Lua 原子执行 SET NX EX TTL 去重、INCR like delta
+-> TTL 窗口内重复点赞返回幂等成功，不增加 delta
+-> TTL 过后再次点赞可重新进入 delta
+-> 定时任务按 flushing delta 累加 PostgreSQL like_count
+-> Redis 失败则返回可重试失败，保护数据库
 -> 返回成功
 ```
 
@@ -505,13 +496,14 @@ Feed cursor 内容：
 
 ```text
 获取当前用户性别
--> 三路召回：热门、最近 90 天点赞作者、新帖
+-> 从 user-service 获取当前用户喜欢过的人 ID
+-> 三路召回：热门、喜欢过的人帖子、新帖
 -> 候选放大
 -> 批量查作者性别
 -> 过滤异性、排除自己、排除不可见帖子
--> 去重，优先级：点赞作者 > 热门 > 新帖
+-> 去重，优先级：喜欢过的人 > 热门 > 新帖
 -> 按 4:3:3 混排
--> 不足按 新帖 > 热门 > 点赞作者 补位
+-> 不足按 新帖 > 热门 > 喜欢过的人 补位
 -> 返回图片 object_key
 -> 返回 Feed 和 cursor
 ```
@@ -564,7 +556,7 @@ DELETE_FAILED -> CLEANING
 - 删除帖子状态更新。
 - 创建评论、更新评论计数。
 - 删除评论、更新评论计数。
-- 插入点赞关系。
+- 点赞回写任务按 Redis delta 累加 `post.like_count`。
 
 事务外执行：
 
@@ -572,7 +564,8 @@ DELETE_FAILED -> CLEANING
 - User/Profile gRPC 调用。
 - 审核 SDK 调用。
 - RocketMQ 事件发送。
-- Redis 缓存刷新。
+- 点赞请求链路 Redis TTL 去重、delta `INCR` 和缓存刷新。
+- 点赞回写任务的 Redis delta/flushing key 转移。
 
 原则：不让远程调用拖长数据库事务。
 
@@ -580,8 +573,9 @@ DELETE_FAILED -> CLEANING
 
 点赞：
 
-- 通过 `post_like(user_id, post_id)` 唯一约束实现。
-- 重复请求返回成功，不重复增加 Redis delta。
+- 请求链路通过 Redis `like:users:{post_no}:{user_id}` TTL key 实现快速去重。
+- TTL 窗口内重复请求返回成功，不重复增加 Redis delta。
+- TTL 过后同一用户再次点赞会重新计数。
 
 发帖和评论：
 
@@ -642,11 +636,12 @@ DELETE_FAILED -> CLEANING
 
 点赞计数可靠性：
 
-- 点赞关系以 PostgreSQL 为准。
-- Redis delta 只做计数缓冲。
+- 请求链路以 Redis 为第一写入点，PostgreSQL 只通过后台任务回写帖子点赞计数。
+- Redis delta 做实时展示计数，也作为回写任务扫描入口。
 - 回写任务使用分布式锁。
-- 回写采用原子转移：delta key 转移到 flushing key，再写 DB，成功删除 flushing key，失败保留重试。
-- Redis INCR 失败时，后续可通过 `post_like` 按时间窗口或全量重建修复 `like_count`。
+- 回写采用原子转移：delta 转移到 flushing key，再按 flushing delta 写 DB，成功删除 flushing key，失败保留重试。
+- 点赞关系不落 PostgreSQL；TTL 窗口内去重由 Redis 保证，TTL 过后再次点赞允许再次计数。
+- Redis 写入失败时点赞请求失败并提示重试，不绕过 Redis 直接写 PostgreSQL。
 
 TEMP 图片清理可靠性：
 
@@ -667,16 +662,16 @@ Feed 可靠性：
 
 兜底方案：
 
-- 总体原则：读链路可以降级，写链路必须保证数据真实落库后才返回成功；任何兜底都不能绕过权限校验、可见性校验和异性过滤规则。
-- PostgreSQL 不可用：发帖、删帖、点赞、评论等写操作直接失败并返回可重试错误，不使用 Redis 或本地内存伪造写成功；Feed、详情、作者帖子列表等读接口可返回明确失败，不承诺离线可读。
-- Redis 不可用：点赞关系仍写 PostgreSQL，点赞成功后记录日志和指标，计数展示退回 PostgreSQL `like_count` 基准值；热门候选缓存不可用时直接查 PostgreSQL，并使用 `like_count` 基准值计算热度；性别缓存不可用时直接调用 User/Profile。
+- 总体原则：读链路可以降级，普通写链路必须保证数据真实落库后才返回成功；点赞是高频写特例，必须保证 Redis 成功接收去重和计数后才返回成功。任何兜底都不能绕过权限校验、可见性校验和异性过滤规则。
+- PostgreSQL 不可用：发帖、删帖、评论等普通写操作直接失败并返回可重试错误；点赞请求仍可在 Redis 可用时先成功接收，待 PostgreSQL 恢复后由回写任务累加 `post.like_count`；Feed、详情、作者帖子列表等读接口可返回明确失败，不承诺离线可读。
+- Redis 不可用：点赞请求直接失败并提示稍后重试，不退回同步写 PostgreSQL；计数展示退回 PostgreSQL `like_count` 基准值；热门候选缓存不可用时直接查 PostgreSQL，并使用 `like_count` 基准值计算热度；性别缓存不可用时直接调用 User/Profile。
 - User/Profile 不可用：当前用户性别如果 Redis 缓存命中，则使用缓存继续生成 Feed；如果当前用户性别无缓存，则返回空 Feed 并提示稍后重试，避免破坏“只推荐异性”规则；候选作者性别获取失败时跳过该作者，结果不足时允许少于 pageSize 返回。
 - MinIO 不可用：申请上传 URL 失败时直接返回错误；发帖绑定图片时 `statObject` 失败则发帖失败，不把未确认上传成功的图片绑定到帖子；TEMP 图片清理失败保持 `DELETE_FAILED` 状态并等待下次重试。
 - Nacos 不可用：已启动实例继续使用本地已加载配置和已有服务发现缓存；新实例启动失败时不自动降级到硬编码地址；本地开发可临时在 profile 中指定直连地址，但不能提交到仓库。
 - RocketMQ 不可用：MVP 本身不依赖 RocketMQ；后续启用事件发送后，MQ 失败不影响主业务提交，事件发送失败记录日志和指标，必要时通过数据库事实表补发。
 - 审核 SDK 不可用：MVP 使用 no-op 默认通过；后续接入真实审核后，SDK 调用失败时保持帖子当前可见性策略不变，并记录待审核补偿任务，不能在数据库事务内阻塞发帖。
 - Feed 候选不足：三路召回、异性过滤、去重、补位后仍不足 pageSize 时，返回实际数量，不额外放宽性别、状态、作者本人排除等规则。
-- 点赞计数回写失败：保留 Redis delta / flushing key，后续任务继续重试；如果 Redis 数据丢失，以 PostgreSQL `post_like` 关系表为准按 `post_no` 重建 `like_count`。
+- 点赞回写失败：保留 Redis delta 或 flushing key，后续任务继续重试；如果 Redis 数据丢失，未回写的点赞增量无法从 PostgreSQL 恢复，需要监控和告警保障。
 
 ## 19. 可观测性设计
 
@@ -783,7 +778,7 @@ dating:
 5. 实现帖子创建、删除、详情、作者帖子列表。
 6. 实现 MinIO 上传 URL、object key 出参、statObject 校验。
 7. 实现图片 TEMP、BOUND、清理状态机。
-8. 实现点赞关系、重复点赞幂等。
+8. 实现点赞 TTL 去重、重复点赞幂等。
 9. 实现 Redis 点赞 delta 和定时回写。
 10. 实现点赞计数修复策略。
 11. 实现评论、楼中楼、删除评论、评论列表和楼中楼回复列表。

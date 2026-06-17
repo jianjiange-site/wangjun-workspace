@@ -27,7 +27,7 @@ CREATE TABLE post_image (
     id BIGINT PRIMARY KEY,
     image_no BIGINT NOT NULL,
     user_id BIGINT NOT NULL,
-    post_id BIGINT,
+    post_no BIGINT,
     bucket VARCHAR(128) NOT NULL,
     object_key VARCHAR(512) NOT NULL,
     content_type VARCHAR(128) NOT NULL,
@@ -50,24 +50,12 @@ CREATE TABLE post_image (
 
 CREATE INDEX idx_user_status ON post_image (user_id, status);
 CREATE INDEX idx_temp_expire ON post_image (status, upload_expire_at);
-CREATE INDEX idx_post_sort ON post_image (post_id, sort_order);
-
-CREATE TABLE post_like (
-    id BIGINT PRIMARY KEY,
-    user_id BIGINT NOT NULL,
-    post_id BIGINT NOT NULL,
-    post_author_id BIGINT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL,
-    CONSTRAINT uk_user_post UNIQUE (user_id, post_id)
-);
-
-CREATE INDEX idx_user_created ON post_like (user_id, created_at DESC);
-CREATE INDEX idx_user_author_created ON post_like (user_id, post_author_id, created_at DESC);
+CREATE INDEX idx_post_image_post_sort ON post_image (post_no, sort_order);
 
 CREATE TABLE comment (
     id BIGINT PRIMARY KEY,
     comment_no BIGINT NOT NULL,
-    post_id BIGINT NOT NULL,
+    post_no BIGINT NOT NULL,
     author_id BIGINT NOT NULL,
     root_comment_id BIGINT NOT NULL,
     parent_comment_id BIGINT,
@@ -82,7 +70,7 @@ CREATE TABLE comment (
     CONSTRAINT ck_comment_status CHECK (status IN ('NORMAL', 'USER_DELETED'))
 );
 
-CREATE INDEX idx_comment_post_status_created ON comment (post_id, status, created_at DESC);
+CREATE INDEX idx_comment_post_status_created ON comment (post_no, status, created_at DESC);
 CREATE INDEX idx_comment_root_created ON comment (root_comment_id, created_at ASC);
 CREATE INDEX idx_comment_author_created ON comment (author_id, created_at DESC);
 

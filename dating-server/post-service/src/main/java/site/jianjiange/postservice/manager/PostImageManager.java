@@ -88,11 +88,11 @@ public class PostImageManager {
      * 绑定当前用户已经校验过的 TEMP 图片到帖子。
      *
      * @param userId 当前用户 ID
-     * @param postId 帖子技术主键
+     * @param postNo 帖子业务号
      * @param images 图片实体列表
      * @param now 当前时间
      */
-    public void bindTempImages(Long userId, Long postId, List<PostImageEntity> images, OffsetDateTime now) {
+    public void bindTempImages(Long userId, Long postNo, List<PostImageEntity> images, OffsetDateTime now) {
         if (images == null || images.isEmpty()) {
             return;
         }
@@ -102,8 +102,8 @@ public class PostImageManager {
                     .eq(PostImageEntity::getId, image.getId())
                     .eq(PostImageEntity::getUserId, userId)
                     .eq(PostImageEntity::getStatus, ImageStatus.TEMP)
-                    .isNull(PostImageEntity::getPostId)
-                    .set(PostImageEntity::getPostId, postId)
+                    .isNull(PostImageEntity::getPostNo)
+                    .set(PostImageEntity::getPostNo, postNo)
                     .set(PostImageEntity::getStatus, ImageStatus.BOUND)
                     .set(PostImageEntity::getSortOrder, index)
                     .set(PostImageEntity::getBoundAt, now)
@@ -117,33 +117,33 @@ public class PostImageManager {
     /**
      * 查询帖子绑定图片列表。
      *
-     * @param postId 帖子技术主键
+     * @param postNo 帖子业务号
      * @return 已绑定图片列表
      */
-    public List<PostImageEntity> listBoundImages(Long postId) {
+    public List<PostImageEntity> listBoundImages(Long postNo) {
         return postImageMapper.selectList(new LambdaQueryWrapper<PostImageEntity>()
-                .eq(PostImageEntity::getPostId, postId)
+                .eq(PostImageEntity::getPostNo, postNo)
                 .eq(PostImageEntity::getStatus, ImageStatus.BOUND)
                 .orderByAsc(PostImageEntity::getSortOrder));
     }
 
     /**
-     * 批量查询多个帖子的已绑定图片，并按帖子技术主键分组。
+     * 批量查询多个帖子的已绑定图片，并按帖子业务号分组。
      *
-     * @param postIds 帖子技术主键列表
-     * @return 按帖子技术主键分组的图片列表
+     * @param postNos 帖子业务号列表
+     * @return 按帖子业务号分组的图片列表
      */
-    public Map<Long, List<PostImageEntity>> listBoundImagesByPostIds(List<Long> postIds) {
-        if (postIds == null || postIds.isEmpty()) {
+    public Map<Long, List<PostImageEntity>> listBoundImagesByPostNos(List<Long> postNos) {
+        if (postNos == null || postNos.isEmpty()) {
             return Map.of();
         }
         return postImageMapper.selectList(new LambdaQueryWrapper<PostImageEntity>()
-                        .in(PostImageEntity::getPostId, postIds)
+                        .in(PostImageEntity::getPostNo, postNos)
                         .eq(PostImageEntity::getStatus, ImageStatus.BOUND)
-                        .orderByAsc(PostImageEntity::getPostId, PostImageEntity::getSortOrder))
+                        .orderByAsc(PostImageEntity::getPostNo, PostImageEntity::getSortOrder))
                 .stream()
                 .collect(Collectors.groupingBy(
-                        PostImageEntity::getPostId,
+                        PostImageEntity::getPostNo,
                         LinkedHashMap::new,
                         Collectors.toList()));
     }
@@ -161,7 +161,7 @@ public class PostImageManager {
         if (!userId.equals(image.getUserId())) {
             throw new BusinessException(PostErrorCode.IMAGE_FORBIDDEN, "只能绑定自己的图片");
         }
-        if (image.getStatus() != ImageStatus.TEMP || image.getPostId() != null) {
+        if (image.getStatus() != ImageStatus.TEMP || image.getPostNo() != null) {
             throw new BusinessException(PostErrorCode.IMAGE_STATUS_INVALID, "只能绑定 TEMP 图片");
         }
     }

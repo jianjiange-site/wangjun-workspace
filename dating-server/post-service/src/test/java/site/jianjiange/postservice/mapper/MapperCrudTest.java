@@ -14,7 +14,6 @@ import site.jianjiange.postservice.entity.CommentEntity;
 import site.jianjiange.postservice.entity.IdempotentRequestEntity;
 import site.jianjiange.postservice.entity.PostEntity;
 import site.jianjiange.postservice.entity.PostImageEntity;
-import site.jianjiange.postservice.entity.PostLikeEntity;
 import site.jianjiange.postservice.enums.CommentStatus;
 import site.jianjiange.postservice.enums.ImageStatus;
 import site.jianjiange.postservice.enums.PostStatus;
@@ -31,9 +30,6 @@ class MapperCrudTest {
 
     @Autowired
     private PostImageMapper postImageMapper;
-
-    @Autowired
-    private PostLikeMapper postLikeMapper;
 
     @Autowired
     private CommentMapper commentMapper;
@@ -91,25 +87,6 @@ class MapperCrudTest {
     }
 
     /**
-     * 验证点赞 Mapper 支持单表 CRUD，并验证 user_id 和 post_id 的唯一约束。
-     */
-    @Test
-    void postLikeMapperSupportsSingleTableCrudAndUniqueUserPost() {
-        PostLikeEntity like = postLike(3001L, 4001L, 5001L, 5002L);
-
-        assertThat(postLikeMapper.insert(like)).isEqualTo(1);
-        assertThat(postLikeMapper.selectById(3001L)).isNotNull();
-        assertThat(postLikeMapper.selectList(new LambdaQueryWrapper<PostLikeEntity>()
-                .eq(PostLikeEntity::getUserId, 4001L)
-                .eq(PostLikeEntity::getPostAuthorId, 5002L)))
-                .extracting(PostLikeEntity::getPostId)
-                .containsExactly(5001L);
-
-        assertThatThrownBy(() -> postLikeMapper.insert(postLike(3002L, 4001L, 5001L, 5002L)))
-                .isInstanceOf(DuplicateKeyException.class);
-    }
-
-    /**
      * 验证评论 Mapper 支持插入、按 ID 查询和条件查询。
      */
     @Test
@@ -118,7 +95,7 @@ class MapperCrudTest {
         CommentEntity comment = new CommentEntity();
         comment.setId(4001L);
         comment.setCommentNo(9004001L);
-        comment.setPostId(5001L);
+        comment.setPostNo(9005001L);
         comment.setAuthorId(6001L);
         comment.setRootCommentId(4001L);
         comment.setContent("hello");
@@ -129,7 +106,7 @@ class MapperCrudTest {
         assertThat(commentMapper.insert(comment)).isEqualTo(1);
         assertThat(commentMapper.selectById(4001L)).isNotNull();
         assertThat(commentMapper.selectList(new LambdaQueryWrapper<CommentEntity>()
-                .eq(CommentEntity::getPostId, 5001L)
+                .eq(CommentEntity::getPostNo, 9005001L)
                 .eq(CommentEntity::getStatus, CommentStatus.NORMAL)))
                 .extracting(CommentEntity::getId)
                 .containsExactly(4001L);
@@ -178,25 +155,6 @@ class MapperCrudTest {
         post.setCreatedAt(now);
         post.setUpdatedAt(now);
         return post;
-    }
-
-    /**
-     * 构造用于测试的点赞实体。
-     *
-     * @param id 点赞记录 ID
-     * @param userId 点赞用户 ID
-     * @param postId 被点赞帖子 ID
-     * @param postAuthorId 被点赞帖子作者 ID
-     * @return 点赞实体
-     */
-    private static PostLikeEntity postLike(Long id, Long userId, Long postId, Long postAuthorId) {
-        PostLikeEntity like = new PostLikeEntity();
-        like.setId(id);
-        like.setUserId(userId);
-        like.setPostId(postId);
-        like.setPostAuthorId(postAuthorId);
-        like.setCreatedAt(OffsetDateTime.now());
-        return like;
     }
 
     /**

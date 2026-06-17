@@ -18,7 +18,7 @@ public class PostImageEntity {
     private Long id;
     private Long imageNo;
     private Long userId;
-    private Long postId;
+    private Long postNo;
     private String bucket;
     private String objectKey;
     private String contentType;
