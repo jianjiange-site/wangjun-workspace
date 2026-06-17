@@ -18,6 +18,7 @@ import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.test.context.ActiveProfiles;
 import site.jianjiange.postservice.cache.LikeCountCache;
 import site.jianjiange.postservice.cache.PendingLikeRecord;
+import site.jianjiange.postservice.constant.DatabaseSentinel;
 import site.jianjiange.postservice.entity.PostEntity;
 import site.jianjiange.postservice.enums.PostStatus;
 import site.jianjiange.postservice.exception.BusinessException;
@@ -147,6 +148,7 @@ class LikeServiceTest {
         post.setLikeCount(0L);
         post.setCommentCount(0L);
         post.setPublishedAt(now);
+        post.setDeletedAt(DatabaseSentinel.NONE_TIME);
         post.setVersion(0);
         post.setCreatedAt(now);
         post.setUpdatedAt(now);

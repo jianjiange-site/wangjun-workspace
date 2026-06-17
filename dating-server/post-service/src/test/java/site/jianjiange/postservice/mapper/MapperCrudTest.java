@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.test.context.ActiveProfiles;
+import site.jianjiange.postservice.constant.DatabaseSentinel;
 import site.jianjiange.postservice.entity.CommentEntity;
 import site.jianjiange.postservice.entity.IdempotentRequestEntity;
 import site.jianjiange.postservice.entity.PostEntity;
@@ -63,6 +64,7 @@ class MapperCrudTest {
         image.setId(2001L);
         image.setImageNo(9002001L);
         image.setUserId(3001L);
+        image.setPostNo(DatabaseSentinel.NONE_ID);
         image.setBucket("wangjun-dating");
         image.setObjectKey("wangjun-tmp/post/3001/202606/image.jpg");
         image.setContentType("image/jpeg");
@@ -73,6 +75,7 @@ class MapperCrudTest {
         image.setSortOrder(0);
         image.setStatus(ImageStatus.TEMP);
         image.setUploadExpireAt(now.plusHours(1));
+        image.setBoundAt(DatabaseSentinel.NONE_TIME);
         image.setRetryCount(0);
         image.setCreatedAt(now);
         image.setUpdatedAt(now);
@@ -98,10 +101,13 @@ class MapperCrudTest {
         comment.setPostNo(9005001L);
         comment.setAuthorId(6001L);
         comment.setRootCommentId(4001L);
+        comment.setParentCommentId(DatabaseSentinel.NONE_ID);
+        comment.setReplyToUserId(DatabaseSentinel.NONE_ID);
         comment.setContent("hello");
         comment.setLevel(1);
         comment.setStatus(CommentStatus.NORMAL);
         comment.setCreatedAt(now);
+        comment.setDeletedAt(DatabaseSentinel.NONE_TIME);
 
         assertThat(commentMapper.insert(comment)).isEqualTo(1);
         assertThat(commentMapper.selectById(4001L)).isNotNull();
@@ -151,6 +157,7 @@ class MapperCrudTest {
         post.setLikeCount(0L);
         post.setCommentCount(0L);
         post.setPublishedAt(now);
+        post.setDeletedAt(DatabaseSentinel.NONE_TIME);
         post.setVersion(0);
         post.setCreatedAt(now);
         post.setUpdatedAt(now);

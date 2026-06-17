@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
+import site.jianjiange.postservice.constant.DatabaseSentinel;
 import site.jianjiange.postservice.entity.PostEntity;
 import site.jianjiange.postservice.enums.PostStatus;
 import site.jianjiange.postservice.mapper.PostMapper;
@@ -89,6 +90,7 @@ class LikeManagerTest {
         post.setLikeCount(0L);
         post.setCommentCount(0L);
         post.setPublishedAt(now);
+        post.setDeletedAt(DatabaseSentinel.NONE_TIME);
         post.setVersion(0);
         post.setCreatedAt(now);
         post.setUpdatedAt(now);

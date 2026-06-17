@@ -141,6 +141,7 @@ service -> client/storage/cache
 - MyBatis-Plus Mapper 保持单表访问；复杂查询先分别查表，再在 service/manager 层组合。
 - 各表 `id` 仅作为数据库技术主键，不具备业务含义，不在 gRPC 协议中直接暴露；对外业务标识统一使用明确命名的 `post_no`、`image_no`、`comment_no`。
 - 帖子相关关系字段统一使用业务标识 `post_no`，不使用帖子技术主键做跨表关联；评论楼层内部字段 `root_comment_id`、`parent_comment_id` 仍仅在评论表内部使用。
+- 数据库字段统一 `NOT NULL`；无关联 ID 使用 `-1`，未发生时间使用 `1970-01-01T00:00:00Z`，空文本使用空字符串。
 
 ### post
 
@@ -248,6 +249,10 @@ service -> client/storage/cache
 - `root_comment_id`、`parent_comment_id` 为内部技术主键关系；gRPC 入参出参使用 `comment_no`。
 - 二级回复：`level = 2`，挂到一级评论下。
 - 允许回复二级回复，但展示仍为两级。
+- 一级评论和二级回复均按 `created_at ASC, id ASC` 返回，保证创建先后顺序稳定。
+- 一级评论列表按 `page_no` 页号分页，每页固定 50 条，不内嵌二级回复预览。
+- 一级评论结果返回二级回复总数和总页数，用于前端展示“查看回复/页号”。
+- 展开二级回复使用 `page_no` 页号分页，每页固定 10 条，不使用游标。
 - 一级评论删除不级联删除回复。
 
 ### idempotent_request
@@ -438,7 +443,7 @@ RPC 职责：
 - `LikePost`：点赞帖子，不支持取消，重复点赞幂等成功。
 - `CreateComment`：创建一级评论或楼中楼回复。
 - `DeleteComment`：评论作者软删除自己的评论。
-- `ListPostComments`：分页查询帖子一级评论列表，可附带每条一级评论下的少量楼中楼预览。
+- `ListPostComments`：分页查询帖子一级评论列表，并返回每条一级评论下的回复总数和回复总页数。
 - `ListCommentReplies`：分页查询某个一级评论下的楼中楼回复列表，用于展开楼中楼。
 - `CreateImageUploadUrl`：为当前用户创建 TEMP 图片记录，并返回 MinIO 预签名上传 URL、`image_no`、`object_key`；客户端用它直传图片到 MinIO，Post 服务不承接图片文件流量。
 - `GetImageKeys`：按帖子业务号或图片业务号查询已绑定图片的 `object_key`，并校验调用者对帖子可见；用于详情、Feed 或主页场景拿到图片 key。它不返回完整 URL，访问 URL 由前端、网关或统一对象访问层按环境拼接或签发。
@@ -447,8 +452,10 @@ RPC 职责：
 
 - 写接口携带 `client_request_id`，点赞依赖 Redis TTL 去重保证幂等。
 - `CreatePost` 只接 `image_no`，不允许直接提交任意 objectKey。
-- `ListPostComments` 只返回一级评论分页，楼中楼预览数量固定较小，例如每条一级评论最多 2 条。
-- `ListCommentReplies` 必须指定一级评论 `root_comment_no`，只返回该一级评论下的二级回复。
+- `ListPostComments` 指定 `post_no` 和 `page_no`，只返回一级评论分页，一级评论每页固定 50 条；不返回楼中楼预览，但返回该一级评论下回复总数和总页数，用于前端展示页号。
+- `ListPostComments` 查询不存在或不可见帖子时返回 `POST_NOT_FOUND`。
+- `ListCommentReplies` 必须指定一级评论 `root_comment_no` 和 `page_no`，只返回该一级评论下按统一排序规则分页的二级回复页。
+- `ListCommentReplies` 使用页号分页，二级回复每页固定 10 条，并基于 `created_at ASC, id ASC` 稳定排序。
 - `GetFeed` 使用服务端生成、签名、防篡改 cursor。
 - `GetImageKeys` 必须校验帖子可见性，不能任意 `image_no` 换 object key。
 - 如果部署策略要求私有桶短期访问 URL，由网关或统一对象访问层基于 `object_key` 签发，Post 业务表和核心 gRPC 协议仍以 key 为准。

@@ -19,6 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import site.jianjiange.postservice.cache.LikeCountCache;
+import site.jianjiange.postservice.constant.DatabaseSentinel;
 import site.jianjiange.postservice.entity.IdempotentRequestEntity;
 import site.jianjiange.postservice.entity.PostEntity;
 import site.jianjiange.postservice.entity.PostImageEntity;
@@ -124,6 +125,7 @@ public class PostService {
         post.setLikeCount(0L);
         post.setCommentCount(0L);
         post.setPublishedAt(now);
+        post.setDeletedAt(DatabaseSentinel.NONE_TIME);
         post.setVersion(0);
         post.setCreatedAt(now);
         post.setUpdatedAt(now);
@@ -247,7 +249,7 @@ public class PostService {
         List<PostImageResult> imageResults = images.stream()
                 .map(this::toImageResult)
                 .toList();
-        long likeCount = (post.getLikeCount() == null ? 0L : post.getLikeCount()) + pendingLikeDelta;
+        long likeCount = post.getLikeCount() + pendingLikeDelta;
         return new PostResult(
                 post.getPostNo(),
                 post.getAuthorId(),

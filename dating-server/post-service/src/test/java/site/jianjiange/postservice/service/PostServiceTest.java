@@ -26,6 +26,7 @@ import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import site.jianjiange.postservice.cache.LikeCountCache;
+import site.jianjiange.postservice.constant.DatabaseSentinel;
 import site.jianjiange.postservice.entity.IdempotentRequestEntity;
 import site.jianjiange.postservice.entity.PostEntity;
 import site.jianjiange.postservice.entity.PostImageEntity;
@@ -416,6 +417,7 @@ class PostServiceTest {
         image.setId(100000L + imageNo);
         image.setImageNo(imageNo);
         image.setUserId(userId);
+        image.setPostNo(DatabaseSentinel.NONE_ID);
         image.setBucket("wangjun-dating");
         image.setObjectKey("wangjun-tmp/post/" + userId + "/" + imageNo + ".jpg");
         image.setContentType("image/jpeg");
@@ -426,6 +428,7 @@ class PostServiceTest {
         image.setSortOrder(0);
         image.setStatus(ImageStatus.TEMP);
         image.setUploadExpireAt(now.plusHours(1));
+        image.setBoundAt(DatabaseSentinel.NONE_TIME);
         image.setRetryCount(0);
         image.setCreatedAt(now);
         image.setUpdatedAt(now);

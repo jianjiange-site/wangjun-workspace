@@ -12,6 +12,7 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
+import site.jianjiange.postservice.constant.DatabaseSentinel;
 import site.jianjiange.postservice.entity.PostImageEntity;
 import site.jianjiange.postservice.enums.ImageStatus;
 import site.jianjiange.postservice.exception.BusinessException;
@@ -102,7 +103,7 @@ public class PostImageManager {
                     .eq(PostImageEntity::getId, image.getId())
                     .eq(PostImageEntity::getUserId, userId)
                     .eq(PostImageEntity::getStatus, ImageStatus.TEMP)
-                    .isNull(PostImageEntity::getPostNo)
+                    .eq(PostImageEntity::getPostNo, DatabaseSentinel.NONE_ID)
                     .set(PostImageEntity::getPostNo, postNo)
                     .set(PostImageEntity::getStatus, ImageStatus.BOUND)
                     .set(PostImageEntity::getSortOrder, index)
@@ -161,7 +162,7 @@ public class PostImageManager {
         if (!userId.equals(image.getUserId())) {
             throw new BusinessException(PostErrorCode.IMAGE_FORBIDDEN, "只能绑定自己的图片");
         }
-        if (image.getStatus() != ImageStatus.TEMP || image.getPostNo() != null) {
+        if (image.getStatus() != ImageStatus.TEMP || !DatabaseSentinel.isNoneId(image.getPostNo())) {
             throw new BusinessException(PostErrorCode.IMAGE_STATUS_INVALID, "只能绑定 TEMP 图片");
         }
     }
@@ -182,7 +183,6 @@ public class PostImageManager {
         }
 
         if (metadata.sizeBytes() <= 0
-                || image.getSizeBytes() == null
                 || image.getSizeBytes() <= 0
                 || metadata.sizeBytes() != image.getSizeBytes()) {
             throw new BusinessException(PostErrorCode.IMAGE_NOT_UPLOADED, "图片大小不合法");
