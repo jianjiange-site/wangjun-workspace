@@ -2,17 +2,33 @@ package site.jianjiange.postservice.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.reset;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.test.context.ActiveProfiles;
+import site.jianjiange.postservice.cache.CommentCache;
+import site.jianjiange.postservice.cache.PendingCommentAcceptResult;
+import site.jianjiange.postservice.cache.PendingCommentRecord;
 import site.jianjiange.postservice.constant.DatabaseSentinel;
 import site.jianjiange.postservice.entity.CommentEntity;
 import site.jianjiange.postservice.entity.IdempotentRequestEntity;
@@ -21,6 +37,7 @@ import site.jianjiange.postservice.enums.CommentStatus;
 import site.jianjiange.postservice.enums.PostStatus;
 import site.jianjiange.postservice.exception.BusinessException;
 import site.jianjiange.postservice.exception.PostErrorCode;
+import site.jianjiange.postservice.job.CommentFlushJob;
 import site.jianjiange.postservice.mapper.CommentMapper;
 import site.jianjiange.postservice.mapper.IdempotentRequestMapper;
 import site.jianjiange.postservice.mapper.PostMapper;
@@ -31,7 +48,7 @@ import site.jianjiange.postservice.service.result.CommentResult;
 import site.jianjiange.postservice.service.result.CreateCommentResult;
 
 /**
- * 评论业务服务测试，覆盖阶段 4.4 的两级评论、删除和幂等规则。
+ * 评论业务服务测试，覆盖 Redis pending 接收、数据库分页展示、删除和异步回写规则。
  */
 @ActiveProfiles("test")
 @SpringBootTest
@@ -39,6 +56,9 @@ class CommentServiceTest {
 
     @Autowired
     private CommentService commentService;
+
+    @Autowired
+    private CommentFlushJob commentFlushJob;
 
     @Autowired
     private PostMapper postMapper;
@@ -49,44 +69,60 @@ class CommentServiceTest {
     @Autowired
     private IdempotentRequestMapper idempotentRequestMapper;
 
+    @MockBean
+    private CommentCache commentCache;
+
+    private final Map<Long, PendingCommentRecord> pendingByNo = new LinkedHashMap<>();
+    private final List<Long> pendingCreateQueue = new ArrayList<>();
+    private final Set<Long> pendingCreateSet = new LinkedHashSet<>();
+    private final List<Long> pendingDeleteQueue = new ArrayList<>();
+    private final Set<Long> pendingDeleteSet = new LinkedHashSet<>();
+    private final Map<String, IdempotentState> idempotentStates = new HashMap<>();
+
     /**
-     * 清理帖子、评论和幂等记录，保证每个用例独立。
+     * 清理帖子、评论、幂等记录和模拟 Redis pending，保证每个用例独立。
      */
     @BeforeEach
     void cleanDatabase() {
         idempotentRequestMapper.delete(new QueryWrapper<>());
         commentMapper.delete(new QueryWrapper<>());
         postMapper.delete(new QueryWrapper<>());
+        resetFakeCommentCache();
     }
 
     /**
-     * 验证创建一级评论时 root_comment_id 指向自身，并同步增加帖子评论数。
+     * 验证创建一级评论时先写入 Redis pending，列表在 flush 后基于数据库可见。
      */
     @Test
-    void createCommentCreatesRootCommentAndIncreasesCommentCount() {
+    void createCommentWritesPendingThenFlushesRootComment() {
         insertPost(1001L, 91001L, 2001L, PostStatus.PUBLISHED);
 
         CreateCommentResult result = commentService.createComment(
                 new CreateCommentCommand(
                         3001L, 91001L, DatabaseSentinel.NONE_ID, " hello comment ", "req-comment-1"));
 
-        CommentEntity comment = selectByCommentNo(result.commentNo());
         assertThat(result.duplicated()).isFalse();
+        assertThat(selectByCommentNo(result.commentNo())).isNull();
+        assertThat(postMapper.selectById(1001L).getCommentCount()).isZero();
+        assertThat(idempotentRequestMapper.selectCount(new QueryWrapper<IdempotentRequestEntity>())).isZero();
+        assertThat(listFirstPostComments(91001L).comments()).isEmpty();
+
+        flushComments();
+
+        CommentEntity comment = selectByCommentNo(result.commentNo());
         assertThat(comment.getContent()).isEqualTo("hello comment");
         assertThat(comment.getLevel()).isEqualTo(1);
-        assertThat(comment.getRootCommentId()).isEqualTo(comment.getId());
-        assertThat(comment.getParentCommentId()).isEqualTo(DatabaseSentinel.NONE_ID);
+        assertThat(comment.getRootCommentNo()).isEqualTo(comment.getCommentNo());
+        assertThat(comment.getParentCommentNo()).isEqualTo(DatabaseSentinel.NONE_ID);
         assertThat(comment.getReplyToUserId()).isEqualTo(DatabaseSentinel.NONE_ID);
         assertThat(postMapper.selectById(1001L).getCommentCount()).isEqualTo(1L);
-        assertThat(idempotentRequestMapper.selectList(new LambdaQueryWrapper<IdempotentRequestEntity>()
-                .eq(IdempotentRequestEntity::getUserId, 3001L)
-                .eq(IdempotentRequestEntity::getClientRequestId, "req-comment-1")))
-                .extracting(IdempotentRequestEntity::getBizNo)
-                .containsExactly(result.commentNo());
+        assertThat(listFirstPostComments(91001L).comments())
+                .extracting(CommentResult::content)
+                .containsExactly("hello comment");
     }
 
     /**
-     * 验证回复一级评论和回复二级评论都展示为二级，并保留被回复用户。
+     * 验证可回复 pending 一级评论和 pending 二级评论，flush 后都展示为二级并保留被回复用户。
      */
     @Test
     void createCommentKeepsRepliesAtSecondLevel() {
@@ -98,21 +134,9 @@ class CommentServiceTest {
         Long secondReplyNo = commentService.createComment(
                 new CreateCommentCommand(3003L, 91001L, firstReplyNo, "reply reply", "req-reply-2")).commentNo();
 
-        CommentEntity root = selectByCommentNo(rootNo);
-        CommentEntity firstReply = selectByCommentNo(firstReplyNo);
-        CommentEntity secondReply = selectByCommentNo(secondReplyNo);
+        flushComments();
 
-        assertThat(firstReply.getLevel()).isEqualTo(2);
-        assertThat(firstReply.getRootCommentId()).isEqualTo(root.getId());
-        assertThat(firstReply.getParentCommentId()).isEqualTo(root.getId());
-        assertThat(firstReply.getReplyToUserId()).isEqualTo(3001L);
-        assertThat(secondReply.getLevel()).isEqualTo(2);
-        assertThat(secondReply.getRootCommentId()).isEqualTo(root.getId());
-        assertThat(secondReply.getParentCommentId()).isEqualTo(firstReply.getId());
-        assertThat(secondReply.getReplyToUserId()).isEqualTo(3002L);
-        assertThat(postMapper.selectById(1001L).getCommentCount()).isEqualTo(3L);
-
-        CommentPageResult rootsPage = commentService.listPostComments(91001L, 1);
+        CommentPageResult rootsPage = listFirstPostComments(91001L);
         List<CommentResult> roots = rootsPage.comments();
         assertThat(roots).hasSize(1);
         assertThat(rootsPage.pageSize()).isEqualTo(50);
@@ -131,6 +155,18 @@ class CommentServiceTest {
         assertThat(replies.comments())
                 .extracting(CommentResult::parentCommentNo)
                 .containsExactly(rootNo, firstReplyNo);
+
+        CommentEntity firstReply = selectByCommentNo(firstReplyNo);
+        CommentEntity secondReply = selectByCommentNo(secondReplyNo);
+        assertThat(firstReply.getLevel()).isEqualTo(2);
+        assertThat(firstReply.getRootCommentNo()).isEqualTo(rootNo);
+        assertThat(firstReply.getParentCommentNo()).isEqualTo(rootNo);
+        assertThat(firstReply.getReplyToUserId()).isEqualTo(3001L);
+        assertThat(secondReply.getLevel()).isEqualTo(2);
+        assertThat(secondReply.getRootCommentNo()).isEqualTo(rootNo);
+        assertThat(secondReply.getParentCommentNo()).isEqualTo(firstReplyNo);
+        assertThat(secondReply.getReplyToUserId()).isEqualTo(3002L);
+        assertThat(postMapper.selectById(1001L).getCommentCount()).isEqualTo(3L);
     }
 
     /**
@@ -152,10 +188,12 @@ class CommentServiceTest {
                 new CreateCommentCommand(3004L, 91001L, firstRootNo, "reply-2", "req-order-reply-2"))
                 .commentNo();
 
-        assertThat(commentService.listPostComments(91001L, 1).comments())
+        flushComments();
+
+        assertThat(listFirstPostComments(91001L).comments())
                 .extracting(CommentResult::commentNo)
                 .containsExactly(firstRootNo, secondRootNo);
-        assertThat(commentService.listPostComments(91001L, 1).comments().get(0).replies()).isEmpty();
+        assertThat(listFirstPostComments(91001L).comments().get(0).replies()).isEmpty();
         assertThat(commentService.listCommentRepliesPage(firstRootNo, 1).comments())
                 .extracting(CommentResult::commentNo)
                 .containsExactly(firstReplyNo, secondReplyNo);
@@ -171,6 +209,7 @@ class CommentServiceTest {
                 new CreateCommentCommand(3001L, 91001L, DatabaseSentinel.NONE_ID, "root", "req-page-root"))
                 .commentNo();
         List<Long> replyNos = createReplies(rootNo, 12, 3100L, "req-page-reply-");
+        flushComments();
 
         CommentPageResult firstPage = commentService.listCommentRepliesPage(rootNo, 1);
         CommentPageResult secondPage = commentService.listCommentRepliesPage(rootNo, 2);
@@ -224,8 +263,9 @@ class CommentServiceTest {
                 .commentNo();
         createReplies(firstRootNo, 51, 3100L, "req-preview-reply-1-");
         createReplies(secondRootNo, 51, 3200L, "req-preview-reply-2-");
+        flushComments();
 
-        List<CommentResult> roots = commentService.listPostComments(91001L, 1).comments();
+        List<CommentResult> roots = listFirstPostComments(91001L).comments();
 
         assertThat(roots)
                 .extracting(CommentResult::commentNo)
@@ -241,33 +281,44 @@ class CommentServiceTest {
     }
 
     /**
-     * 验证一级评论列表按页号分页，每页固定 50 条。
+     * 验证一级评论列表按游标不断读取下一批，每批固定 50 条。
      */
     @Test
-    void listPostCommentsUsesPageNo() {
+    void listPostCommentsUsesCursor() {
         insertPost(1001L, 91001L, 2001L, PostStatus.PUBLISHED);
         List<Long> rootNos = createRootComments(52, 3000L, "req-root-page-");
+        flushComments();
 
-        CommentPageResult firstPage = commentService.listPostComments(91001L, 1);
-        CommentPageResult secondPage = commentService.listPostComments(91001L, 2);
-        CommentPageResult emptyPage = commentService.listPostComments(91001L, 3);
+        CommentPageResult firstPage = listFirstPostComments(91001L);
+        CommentPageResult secondPage = commentService.listPostComments(
+                91001L,
+                firstPage.nextCursorCreatedAt(),
+                firstPage.nextCursorCommentNo());
+        CommentPageResult emptyPage = commentService.listPostComments(
+                91001L,
+                secondPage.nextCursorCreatedAt(),
+                secondPage.nextCursorCommentNo());
 
         assertThat(firstPage.comments())
                 .extracting(CommentResult::commentNo)
                 .containsExactlyElementsOf(rootNos.subList(0, 50));
+        assertThat(firstPage.pageNo()).isEqualTo(DatabaseSentinel.NONE_NUMBER);
         assertThat(firstPage.pageSize()).isEqualTo(50);
-        assertThat(firstPage.totalCount()).isEqualTo(52L);
-        assertThat(firstPage.totalPages()).isEqualTo(2);
+        assertThat(firstPage.totalCount()).isEqualTo(DatabaseSentinel.NONE_ID);
+        assertThat(firstPage.totalPages()).isEqualTo(DatabaseSentinel.NONE_NUMBER);
         assertThat(firstPage.hasPrevious()).isFalse();
         assertThat(firstPage.hasNext()).isTrue();
+        assertThat(firstPage.nextCursorCommentNo()).isEqualTo(rootNos.get(49));
         assertThat(secondPage.comments())
                 .extracting(CommentResult::commentNo)
                 .containsExactlyElementsOf(rootNos.subList(50, 52));
-        assertThat(secondPage.hasPrevious()).isTrue();
+        assertThat(secondPage.hasPrevious()).isFalse();
         assertThat(secondPage.hasNext()).isFalse();
+        assertThat(secondPage.nextCursorCommentNo()).isEqualTo(rootNos.get(51));
         assertThat(emptyPage.comments()).isEmpty();
-        assertThat(emptyPage.pageNo()).isEqualTo(3);
-        assertThat(emptyPage.totalPages()).isEqualTo(2);
+        assertThat(emptyPage.pageNo()).isEqualTo(DatabaseSentinel.NONE_NUMBER);
+        assertThat(emptyPage.totalPages()).isEqualTo(DatabaseSentinel.NONE_NUMBER);
+        assertThat(emptyPage.nextCursorCommentNo()).isEqualTo(secondPage.nextCursorCommentNo());
     }
 
     /**
@@ -284,10 +335,12 @@ class CommentServiceTest {
 
         commentService.deleteComment(new DeleteCommentCommand(3001L, rootNo));
 
+        flushComments();
+
         assertThat(selectByCommentNo(rootNo).getStatus()).isEqualTo(CommentStatus.USER_DELETED);
         assertThat(selectByCommentNo(replyNo).getStatus()).isEqualTo(CommentStatus.NORMAL);
         assertThat(postMapper.selectById(1001L).getCommentCount()).isEqualTo(1L);
-        assertThat(commentService.listPostComments(91001L, 1).comments()).isEmpty();
+        assertThat(listFirstPostComments(91001L).comments()).isEmpty();
         assertThat(commentService.listCommentRepliesPage(rootNo, 1).comments())
                 .extracting(CommentResult::commentNo)
                 .containsExactly(replyNo);
@@ -307,8 +360,13 @@ class CommentServiceTest {
                 .isInstanceOfSatisfying(BusinessException.class, ex ->
                         assertThat(ex.getErrorCode()).isEqualTo(PostErrorCode.COMMENT_FORBIDDEN));
 
+        assertThat(listFirstPostComments(91001L).comments()).isEmpty();
+        flushComments();
         assertThat(selectByCommentNo(commentNo).getStatus()).isEqualTo(CommentStatus.NORMAL);
         assertThat(postMapper.selectById(1001L).getCommentCount()).isEqualTo(1L);
+        assertThat(listFirstPostComments(91001L).comments())
+                .extracting(CommentResult::commentNo)
+                .containsExactly(commentNo);
     }
 
     /**
@@ -325,8 +383,15 @@ class CommentServiceTest {
 
         assertThat(second.commentNo()).isEqualTo(first.commentNo());
         assertThat(second.duplicated()).isTrue();
+        assertThat(commentMapper.selectCount(new QueryWrapper<>())).isZero();
+        assertThat(postMapper.selectById(1001L).getCommentCount()).isZero();
+        assertThat(listFirstPostComments(91001L).comments()).isEmpty();
+
+        flushComments();
+
         assertThat(commentMapper.selectCount(new QueryWrapper<>())).isEqualTo(1L);
         assertThat(postMapper.selectById(1001L).getCommentCount()).isEqualTo(1L);
+        assertThat(listFirstPostComments(91001L).comments()).hasSize(1);
     }
 
     /**
@@ -357,6 +422,27 @@ class CommentServiceTest {
                         assertThat(ex.getErrorCode()).isEqualTo(PostErrorCode.POST_NOT_PUBLISHED));
 
         assertThat(commentMapper.selectCount(new QueryWrapper<>())).isZero();
+        assertThat(pendingByNo).isEmpty();
+        assertThat(postMapper.selectById(1001L).getCommentCount()).isZero();
+    }
+
+    /**
+     * 验证 Redis 不可用时评论创建失败，不降级写数据库。
+     */
+    @Test
+    void createCommentRejectsWhenRedisUnavailable() {
+        insertPost(1001L, 91001L, 2001L, PostStatus.PUBLISHED);
+        reset(commentCache);
+        doThrow(new RuntimeException("redis down"))
+                .when(commentCache)
+                .findCreateResult(anyLong(), anyString(), anyString());
+
+        assertThatThrownBy(() -> commentService.createComment(new CreateCommentCommand(
+                3001L, 91001L, DatabaseSentinel.NONE_ID, "hidden", "req-redis-down")))
+                .isInstanceOfSatisfying(BusinessException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(PostErrorCode.COMMENT_TEMPORARILY_UNAVAILABLE));
+
+        assertThat(commentMapper.selectCount(new QueryWrapper<>())).isZero();
         assertThat(postMapper.selectById(1001L).getCommentCount()).isZero();
     }
 
@@ -367,9 +453,98 @@ class CommentServiceTest {
     void listPostCommentsRejectsUnpublishedPost() {
         insertPost(1001L, 91001L, 2001L, PostStatus.USER_DELETED);
 
-        assertThatThrownBy(() -> commentService.listPostComments(91001L, 1))
+        assertThatThrownBy(() -> listFirstPostComments(91001L))
                 .isInstanceOfSatisfying(BusinessException.class, ex ->
                         assertThat(ex.getErrorCode()).isEqualTo(PostErrorCode.POST_NOT_FOUND));
+    }
+
+    private void resetFakeCommentCache() {
+        reset(commentCache);
+        pendingByNo.clear();
+        pendingCreateQueue.clear();
+        pendingCreateSet.clear();
+        pendingDeleteQueue.clear();
+        pendingDeleteSet.clear();
+        idempotentStates.clear();
+        stubFakeCommentCache();
+    }
+
+    private void stubFakeCommentCache() {
+        doAnswer(invocation -> {
+            PendingCommentRecord record = invocation.getArgument(0);
+            String requestHash = invocation.getArgument(1);
+            String clientRequestId = invocation.getArgument(2);
+            String idempotentKey = idempotentKey(record.authorId(), clientRequestId);
+            IdempotentState existing = idempotentStates.get(idempotentKey);
+            if (existing != null) {
+                return new PendingCommentAcceptResult(
+                        existing.commentNo(), true, !existing.requestHash().equals(requestHash));
+            }
+
+            idempotentStates.put(idempotentKey, new IdempotentState(requestHash, record.commentNo()));
+            writePendingRecord(record);
+            pendingCreateQueue.add(record.commentNo());
+            pendingCreateSet.add(record.commentNo());
+            return new PendingCommentAcceptResult(record.commentNo(), false, false);
+        }).when(commentCache).acceptCreate(any(PendingCommentRecord.class), anyString(), anyString());
+
+        doAnswer(invocation -> {
+            Long authorId = invocation.getArgument(0);
+            String clientRequestId = invocation.getArgument(1);
+            String requestHash = invocation.getArgument(2);
+            IdempotentState existing = idempotentStates.get(idempotentKey(authorId, clientRequestId));
+            if (existing == null) {
+                return Optional.empty();
+            }
+            return Optional.of(new PendingCommentAcceptResult(
+                    existing.commentNo(), true, !existing.requestHash().equals(requestHash)));
+        }).when(commentCache).findCreateResult(anyLong(), anyString(), anyString());
+
+        doAnswer(invocation -> Optional.ofNullable(pendingByNo.get(invocation.getArgument(0))))
+                .when(commentCache)
+                .findPendingComment(anyLong());
+        doAnswer(invocation -> pendingDeleteSet.contains(invocation.getArgument(0)))
+                .when(commentCache)
+                .isPendingDeleted(anyLong());
+        doAnswer(invocation -> pendingCreateSet.contains(invocation.getArgument(0)))
+                .when(commentCache)
+                .hasPendingCreate(anyLong());
+        doAnswer(invocation -> distinctList(pendingCreateQueue))
+                .when(commentCache)
+                .listPendingCreateCommentNos();
+        doAnswer(invocation -> distinctList(pendingDeleteQueue))
+                .when(commentCache)
+                .listPendingDeleteCommentNos();
+        doAnswer(invocation -> {
+            PendingCommentRecord record = invocation.getArgument(0);
+            if (!pendingDeleteSet.add(record.commentNo())) {
+                return false;
+            }
+            writePendingRecord(record);
+            pendingDeleteQueue.add(record.commentNo());
+            return true;
+        }).when(commentCache).acceptDelete(any(PendingCommentRecord.class));
+        doAnswer(invocation -> {
+            ackCreate(invocation.getArgument(0));
+            return null;
+        }).when(commentCache).ackCreate(any(PendingCommentRecord.class));
+        doAnswer(invocation -> {
+            ackDelete(invocation.getArgument(0));
+            return null;
+        }).when(commentCache).ackDelete(any(PendingCommentRecord.class));
+        doAnswer(invocation -> {
+            Long commentNo = invocation.getArgument(0);
+            pendingCreateQueue.removeIf(commentNo::equals);
+            pendingCreateSet.remove(commentNo);
+            return null;
+        }).when(commentCache).discardPendingCreate(anyLong());
+        doAnswer(invocation -> {
+            Long commentNo = invocation.getArgument(0);
+            pendingDeleteQueue.removeIf(commentNo::equals);
+            pendingDeleteSet.remove(commentNo);
+            return null;
+        }).when(commentCache).discardPendingDelete(anyLong());
+        doAnswer(invocation -> Optional.of("test-comment-flush-lock")).when(commentCache).acquireFlushLock();
     }
 
     /**
@@ -428,5 +603,51 @@ class CommentServiceTest {
                     requestPrefix + index)).commentNo());
         }
         return replyNos;
+    }
+
+    private void flushComments() {
+        commentFlushJob.flushComments();
+    }
+
+    private CommentPageResult listFirstPostComments(Long postNo) {
+        return commentService.listPostComments(postNo, DatabaseSentinel.NONE_TIME, DatabaseSentinel.NONE_ID);
+    }
+
+    private void writePendingRecord(PendingCommentRecord record) {
+        pendingByNo.put(record.commentNo(), record);
+    }
+
+    private void deletePendingRecord(PendingCommentRecord record) {
+        pendingByNo.remove(record.commentNo());
+    }
+
+    private List<Long> distinctList(List<Long> values) {
+        return new ArrayList<>(new LinkedHashSet<>(values));
+    }
+
+    private void ackCreate(PendingCommentRecord record) {
+        pendingCreateQueue.removeIf(record.commentNo()::equals);
+        if (record.status() == CommentStatus.NORMAL) {
+            pendingCreateSet.remove(record.commentNo());
+        } else if (!pendingDeleteSet.contains(record.commentNo())) {
+            pendingCreateSet.remove(record.commentNo());
+        }
+        if (!pendingDeleteSet.contains(record.commentNo())) {
+            deletePendingRecord(record);
+        }
+    }
+
+    private void ackDelete(PendingCommentRecord record) {
+        pendingDeleteQueue.removeIf(record.commentNo()::equals);
+        pendingDeleteSet.remove(record.commentNo());
+        pendingCreateSet.remove(record.commentNo());
+        deletePendingRecord(record);
+    }
+
+    private String idempotentKey(Long authorId, String clientRequestId) {
+        return authorId + ":" + clientRequestId;
+    }
+
+    private record IdempotentState(String requestHash, Long commentNo) {
     }
 }

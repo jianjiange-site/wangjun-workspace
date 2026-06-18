@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.ScanOptions;
@@ -50,6 +51,12 @@ public class LikeCountCache {
             redis.call('RENAME', KEYS[1], KEYS[2])
             redis.call('EXPIRE', KEYS[2], ARGV[1])
             return 1
+            """, Long.class);
+    private static final RedisScript<Long> RELEASE_FLUSH_LOCK_SCRIPT = RedisScript.of("""
+            if redis.call('GET', KEYS[1]) == ARGV[1] then
+                return redis.call('DEL', KEYS[1])
+            end
+            return 0
             """, Long.class);
 
     private final CacheKeyPrefixer cacheKeyPrefixer;
@@ -134,19 +141,30 @@ public class LikeCountCache {
     /**
      * 尝试获取点赞回写锁。
      *
-     * @return 获取成功返回 true
+     * @return 获取成功返回锁拥有者 token，失败返回空
      */
-    public boolean acquireFlushLock() {
+    public Optional<String> acquireFlushLock() {
+        String ownerToken = UUID.randomUUID().toString();
         Boolean acquired = stringRedisTemplate.opsForValue()
-                .setIfAbsent(likeFlushLockKey(), "1", LIKE_FLUSH_LOCK_TTL);
-        return Boolean.TRUE.equals(acquired);
+                .setIfAbsent(likeFlushLockKey(), ownerToken, LIKE_FLUSH_LOCK_TTL);
+        return Boolean.TRUE.equals(acquired) ? Optional.of(ownerToken) : Optional.empty();
     }
 
     /**
-     * 释放点赞回写锁。
+     * 释放点赞回写锁；只有锁 value 仍是当前 owner token 时才删除。
+     *
+     * @param ownerToken 获取锁时返回的拥有者 token
+     * @return 释放成功返回 true，锁已过期或已被其他任务持有时返回 false
      */
-    public void releaseFlushLock() {
-        stringRedisTemplate.delete(likeFlushLockKey());
+    public boolean releaseFlushLock(String ownerToken) {
+        if (ownerToken == null || ownerToken.isBlank()) {
+            return false;
+        }
+        Long released = stringRedisTemplate.execute(
+                RELEASE_FLUSH_LOCK_SCRIPT,
+                List.of(likeFlushLockKey()),
+                ownerToken);
+        return Long.valueOf(1L).equals(released);
     }
 
     /**

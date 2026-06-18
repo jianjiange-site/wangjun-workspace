@@ -37,9 +37,11 @@ public class LikeCountFlushJob {
     @Scheduled(initialDelayString = "${dating.like.flush-initial-delay-ms:60000}",
             fixedDelayString = "${dating.like.flush-fixed-delay-ms:10000}")
     public void flushLikeCounts() {
-        if (!likeCountCache.acquireFlushLock()) {
+        Optional<String> lockToken = likeCountCache.acquireFlushLock();
+        if (lockToken.isEmpty()) {
             return;
         }
+        String ownerToken = lockToken.orElseThrow();
         try {
             flushExistingFlushingKeys();
             transferDeltaKeys();
@@ -48,7 +50,7 @@ public class LikeCountFlushJob {
             log.warn("点赞计数回写任务执行失败，errorType={}, errorMessage={}",
                     ex.getClass().getSimpleName(), ex.getMessage());
         } finally {
-            likeCountCache.releaseFlushLock();
+            likeCountCache.releaseFlushLock(ownerToken);
         }
     }
 

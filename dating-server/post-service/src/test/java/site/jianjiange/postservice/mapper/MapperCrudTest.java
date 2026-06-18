@@ -100,8 +100,8 @@ class MapperCrudTest {
         comment.setCommentNo(9004001L);
         comment.setPostNo(9005001L);
         comment.setAuthorId(6001L);
-        comment.setRootCommentId(4001L);
-        comment.setParentCommentId(DatabaseSentinel.NONE_ID);
+        comment.setRootCommentNo(9004001L);
+        comment.setParentCommentNo(DatabaseSentinel.NONE_ID);
         comment.setReplyToUserId(DatabaseSentinel.NONE_ID);
         comment.setContent("hello");
         comment.setLevel(1);

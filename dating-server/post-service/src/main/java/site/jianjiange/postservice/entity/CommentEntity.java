@@ -19,8 +19,8 @@ public class CommentEntity {
     private Long commentNo;
     private Long postNo;
     private Long authorId;
-    private Long rootCommentId;
-    private Long parentCommentId;
+    private Long rootCommentNo;
+    private Long parentCommentNo;
     private Long replyToUserId;
     private String content;
     private Integer level;

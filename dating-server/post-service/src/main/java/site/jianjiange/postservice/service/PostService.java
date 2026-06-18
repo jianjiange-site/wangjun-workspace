@@ -245,7 +245,10 @@ public class PostService {
      * @param pendingLikeDelta 待回写点赞增量
      * @return 帖子业务结果
      */
-    private PostResult toResult(PostEntity post, List<PostImageEntity> images, long pendingLikeDelta) {
+    private PostResult toResult(
+            PostEntity post,
+            List<PostImageEntity> images,
+            long pendingLikeDelta) {
         List<PostImageResult> imageResults = images.stream()
                 .map(this::toImageResult)
                 .toList();

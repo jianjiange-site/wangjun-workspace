@@ -9,39 +9,35 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
+import site.jianjiange.postservice.constant.DatabaseSentinel;
 import site.jianjiange.postservice.entity.CommentEntity;
-import site.jianjiange.postservice.entity.IdempotentRequestEntity;
 import site.jianjiange.postservice.entity.PostEntity;
 import site.jianjiange.postservice.enums.CommentStatus;
 import site.jianjiange.postservice.enums.PostStatus;
 import site.jianjiange.postservice.mapper.CommentMapper;
-import site.jianjiange.postservice.mapper.IdempotentRequestMapper;
 import site.jianjiange.postservice.mapper.PostMapper;
 
 /**
- * 评论数据管理器，封装评论、帖子和幂等记录的单表访问。
+ * 评论数据管理器，封装评论和帖子计数的单表访问。
  */
 @Component
 public class CommentManager {
 
     private final CommentMapper commentMapper;
     private final PostMapper postMapper;
-    private final IdempotentRequestMapper idempotentRequestMapper;
 
     /**
      * 创建评论数据管理器。
      *
      * @param commentMapper 评论 Mapper
      * @param postMapper 帖子 Mapper
-     * @param idempotentRequestMapper 幂等请求 Mapper
      */
     public CommentManager(
             CommentMapper commentMapper,
-            PostMapper postMapper,
-            IdempotentRequestMapper idempotentRequestMapper) {
+            PostMapper postMapper) {
         this.commentMapper = commentMapper;
         this.postMapper = postMapper;
-        this.idempotentRequestMapper = idempotentRequestMapper;
     }
 
     /**
@@ -67,35 +63,6 @@ public class CommentManager {
     }
 
     /**
-     * 根据评论技术主键批量查询评论。
-     *
-     * @param ids 评论技术主键集合
-     * @return 评论列表
-     */
-    public List<CommentEntity> listByIds(Collection<Long> ids) {
-        if (ids == null || ids.isEmpty()) {
-            return List.of();
-        }
-        return commentMapper.selectBatchIds(ids);
-    }
-
-    /**
-     * 根据幂等键查询已有请求记录。
-     *
-     * @param userId 用户 ID
-     * @param operationType 操作类型
-     * @param clientRequestId 客户端请求 ID
-     * @return 幂等请求记录，未命中时返回 null
-     */
-    public IdempotentRequestEntity findIdempotentRequest(
-            Long userId, String operationType, String clientRequestId) {
-        return idempotentRequestMapper.selectOne(new LambdaQueryWrapper<IdempotentRequestEntity>()
-                .eq(IdempotentRequestEntity::getUserId, userId)
-                .eq(IdempotentRequestEntity::getOperationType, operationType)
-                .eq(IdempotentRequestEntity::getClientRequestId, clientRequestId));
-    }
-
-    /**
      * 插入评论。
      *
      * @param comment 评论实体
@@ -105,12 +72,17 @@ public class CommentManager {
     }
 
     /**
-     * 插入幂等请求记录。
+     * 插入评论，并在需要时同步累加帖子评论数；供异步回写任务保持单条事实的库内一致性。
      *
-     * @param request 幂等请求实体
+     * @param comment 评论实体
+     * @param increaseCount 是否增加 post.comment_count
      */
-    public void createIdempotentRequest(IdempotentRequestEntity request) {
-        idempotentRequestMapper.insert(request);
+    @Transactional
+    public void createCommentWithCount(CommentEntity comment, boolean increaseCount) {
+        createComment(comment);
+        if (increaseCount && !increaseCommentCount(comment.getPostNo(), 1L)) {
+            throw new IllegalStateException("评论计数创建回写失败，postNo=" + comment.getPostNo());
+        }
     }
 
     /**
@@ -152,60 +124,76 @@ public class CommentManager {
     }
 
     /**
-     * 统计帖子一级正常评论数量。
+     * 软删除评论并同步扣减帖子评论数；供异步回写任务保持单条事实的库内一致性。
      *
+     * @param commentNo 评论业务号
+     * @param authorId 评论作者 ID
      * @param postNo 帖子业务号
-     * @return 一级评论数量
+     * @param now 删除时间
      */
-    public long countNormalRootComments(Long postNo) {
-        return commentMapper.selectCount(new LambdaQueryWrapper<CommentEntity>()
-                .eq(CommentEntity::getPostNo, postNo)
-                .eq(CommentEntity::getLevel, 1)
-                .eq(CommentEntity::getStatus, CommentStatus.NORMAL));
+    @Transactional
+    public void softDeleteCommentWithCount(Long commentNo, Long authorId, Long postNo, OffsetDateTime now) {
+        if (!softDeleteComment(commentNo, authorId, now)) {
+            throw new IllegalStateException("评论删除回写失败，commentNo=" + commentNo);
+        }
+        if (!increaseCommentCount(postNo, -1L)) {
+            throw new IllegalStateException("评论计数删除回写失败，postNo=" + postNo);
+        }
     }
 
     /**
-     * 按页号查询帖子一级正常评论。
+     * 按游标查询帖子一级正常评论。
      *
      * @param postNo 帖子业务号
-     * @param pageNo 页号，从 1 开始
-     * @param pageSize 每页数量
+     * @param cursorCreatedAt 上一页最后一条评论的创建时间；首次查询传哨兵时间
+     * @param cursorCommentNo 上一页最后一条评论业务号；首次查询传 -1
+     * @param limit 查询数量
      * @return 一级评论列表
      */
-    public List<CommentEntity> listNormalRootCommentsPage(Long postNo, int pageNo, int pageSize) {
-        int safePageNo = Math.max(1, pageNo);
-        int safePageSize = Math.max(1, pageSize);
-        long offset = (long) (safePageNo - 1) * safePageSize;
-        return commentMapper.selectList(new LambdaQueryWrapper<CommentEntity>()
+    public List<CommentEntity> listNormalRootCommentsAfterCursor(
+            Long postNo,
+            OffsetDateTime cursorCreatedAt,
+            Long cursorCommentNo,
+            int limit) {
+        int safeLimit = Math.max(1, limit);
+        LambdaQueryWrapper<CommentEntity> query = new LambdaQueryWrapper<CommentEntity>()
                 .eq(CommentEntity::getPostNo, postNo)
                 .eq(CommentEntity::getLevel, 1)
-                .eq(CommentEntity::getStatus, CommentStatus.NORMAL)
-                .orderByAsc(CommentEntity::getCreatedAt, CommentEntity::getId)
-                .last("LIMIT " + safePageSize + " OFFSET " + offset));
+                .eq(CommentEntity::getStatus, CommentStatus.NORMAL);
+        if (!DatabaseSentinel.isNoneId(cursorCommentNo)) {
+            query.and(cursor -> cursor
+                    .gt(CommentEntity::getCreatedAt, cursorCreatedAt)
+                    .or()
+                    .eq(CommentEntity::getCreatedAt, cursorCreatedAt)
+                    .gt(CommentEntity::getCommentNo, cursorCommentNo));
+        }
+        return commentMapper.selectList(query
+                .orderByAsc(CommentEntity::getCreatedAt, CommentEntity::getCommentNo)
+                .last("LIMIT " + safeLimit));
     }
 
     /**
      * 按一级评论统计正常二级回复数量。
      *
-     * @param rootCommentIds 一级评论技术主键集合
-     * @return key 为一级评论技术主键、value 为回复数量
+     * @param rootCommentNos 一级评论业务号集合
+     * @return key 为一级评论业务号、value 为回复数量
      */
-    public Map<Long, Long> countNormalRepliesByRootIds(Collection<Long> rootCommentIds) {
-        if (rootCommentIds == null || rootCommentIds.isEmpty()) {
+    public Map<Long, Long> countNormalRepliesByRootNos(Collection<Long> rootCommentNos) {
+        if (rootCommentNos == null || rootCommentNos.isEmpty()) {
             return Map.of();
         }
         List<Map<String, Object>> rows = commentMapper.selectMaps(new QueryWrapper<CommentEntity>()
-                .select("root_comment_id", "COUNT(*) AS reply_count")
-                .in("root_comment_id", rootCommentIds)
+                .select("root_comment_no", "COUNT(*) AS reply_count")
+                .in("root_comment_no", rootCommentNos)
                 .eq("level", 2)
                 .eq("status", CommentStatus.NORMAL.getValue())
-                .groupBy("root_comment_id"));
+                .groupBy("root_comment_no"));
         Map<Long, Long> counts = new HashMap<>();
         for (Map<String, Object> row : rows) {
-            Long rootCommentId = toLong(readMapValue(row, "root_comment_id"));
+            Long rootCommentNo = toLong(readMapValue(row, "root_comment_no"));
             Long replyCount = toLong(readMapValue(row, "reply_count"));
-            if (rootCommentId != null && replyCount != null) {
-                counts.put(rootCommentId, replyCount);
+            if (rootCommentNo != null && replyCount != null) {
+                counts.put(rootCommentNo, replyCount);
             }
         }
         return counts;
@@ -214,12 +202,12 @@ public class CommentManager {
     /**
      * 统计单个一级评论下的正常二级回复数量。
      *
-     * @param rootCommentId 一级评论技术主键
+     * @param rootCommentNo 一级评论业务号
      * @return 回复数量
      */
-    public long countNormalRepliesByRootId(Long rootCommentId) {
+    public long countNormalRepliesByRootNo(Long rootCommentNo) {
         return commentMapper.selectCount(new LambdaQueryWrapper<CommentEntity>()
-                .eq(CommentEntity::getRootCommentId, rootCommentId)
+                .eq(CommentEntity::getRootCommentNo, rootCommentNo)
                 .eq(CommentEntity::getLevel, 2)
                 .eq(CommentEntity::getStatus, CommentStatus.NORMAL));
     }
@@ -227,20 +215,20 @@ public class CommentManager {
     /**
      * 按页号查询单个一级评论下的正常二级回复。
      *
-     * @param rootCommentId 一级评论技术主键
+     * @param rootCommentNo 一级评论业务号
      * @param pageNo 页号，从 1 开始
      * @param pageSize 每页数量
      * @return 二级回复列表
      */
-    public List<CommentEntity> listNormalRepliesByRootIdPage(Long rootCommentId, int pageNo, int pageSize) {
+    public List<CommentEntity> listNormalRepliesByRootNoPage(Long rootCommentNo, int pageNo, int pageSize) {
         int safePageNo = Math.max(1, pageNo);
         int safePageSize = Math.max(1, pageSize);
         long offset = (long) (safePageNo - 1) * safePageSize;
         return commentMapper.selectList(new LambdaQueryWrapper<CommentEntity>()
-                .eq(CommentEntity::getRootCommentId, rootCommentId)
+                .eq(CommentEntity::getRootCommentNo, rootCommentNo)
                 .eq(CommentEntity::getLevel, 2)
                 .eq(CommentEntity::getStatus, CommentStatus.NORMAL)
-                .orderByAsc(CommentEntity::getCreatedAt, CommentEntity::getId)
+                .orderByAsc(CommentEntity::getCreatedAt, CommentEntity::getCommentNo)
                 .last("LIMIT " + safePageSize + " OFFSET " + offset));
     }
 

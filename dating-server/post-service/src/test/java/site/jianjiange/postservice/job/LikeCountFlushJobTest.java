@@ -1,6 +1,7 @@
 package site.jianjiange.postservice.job;
 
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -27,7 +28,8 @@ class LikeCountFlushJobTest {
         LikeCountFlushJob job = new LikeCountFlushJob(likeCountCache, likeManager);
         String deltaKey = "wangjun:post:like:delta:91001";
         String flushingKey = "wangjun:post:like:flushing:91001";
-        when(likeCountCache.acquireFlushLock()).thenReturn(true);
+        String lockToken = "like-flush-token";
+        when(likeCountCache.acquireFlushLock()).thenReturn(Optional.of(lockToken));
         when(likeCountCache.scanFlushingKeys())
                 .thenReturn(Set.of())
                 .thenReturn(Set.of(flushingKey));
@@ -43,7 +45,7 @@ class LikeCountFlushJobTest {
         verify(likeCountCache).moveLikeBuffersToFlushing(91001L);
         verify(likeManager).increaseLikeCount(91001L, 3L);
         verify(likeCountCache).deleteFlushingBuffers(91001L);
-        verify(likeCountCache).releaseFlushLock();
+        verify(likeCountCache).releaseFlushLock(lockToken);
     }
 
     /**
@@ -54,11 +56,12 @@ class LikeCountFlushJobTest {
         LikeCountCache likeCountCache = mock(LikeCountCache.class);
         LikeManager likeManager = mock(LikeManager.class);
         LikeCountFlushJob job = new LikeCountFlushJob(likeCountCache, likeManager);
-        when(likeCountCache.acquireFlushLock()).thenReturn(false);
+        when(likeCountCache.acquireFlushLock()).thenReturn(Optional.empty());
 
         job.flushLikeCounts();
 
         verify(likeCountCache, never()).scanDeltaKeys();
         verify(likeManager, never()).increaseLikeCount(anyLong(), anyLong());
+        verify(likeCountCache, never()).releaseFlushLock(anyString());
     }
 }
