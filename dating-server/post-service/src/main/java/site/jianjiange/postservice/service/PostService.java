@@ -18,12 +18,15 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
+import site.jianjiange.postservice.cache.FeedCache;
 import site.jianjiange.postservice.cache.LikeCountCache;
+import site.jianjiange.postservice.client.FeedUserClient;
 import site.jianjiange.postservice.constant.DatabaseSentinel;
 import site.jianjiange.postservice.entity.IdempotentRequestEntity;
 import site.jianjiange.postservice.entity.PostEntity;
 import site.jianjiange.postservice.entity.PostImageEntity;
 import site.jianjiange.postservice.enums.PostStatus;
+import site.jianjiange.postservice.enums.UserGender;
 import site.jianjiange.postservice.exception.BusinessException;
 import site.jianjiange.postservice.exception.PostErrorCode;
 import site.jianjiange.postservice.manager.PostImageManager;
@@ -49,6 +52,8 @@ public class PostService {
     private final PostManager postManager;
     private final PostImageManager postImageManager;
     private final LikeCountCache likeCountCache;
+    private final FeedCache feedCache;
+    private final FeedUserClient feedUserClient;
     private final TransactionTemplate transactionTemplate;
 
     /**
@@ -58,6 +63,8 @@ public class PostService {
      * @param postManager 帖子数据管理器
      * @param postImageManager 帖子图片管理器
      * @param likeCountCache 点赞计数缓存
+     * @param feedCache Feed 缓存
+     * @param feedUserClient 用户侧端口
      * @param transactionTemplate 事务模板
      */
     public PostService(
@@ -65,11 +72,15 @@ public class PostService {
             PostManager postManager,
             PostImageManager postImageManager,
             LikeCountCache likeCountCache,
+            FeedCache feedCache,
+            FeedUserClient feedUserClient,
             TransactionTemplate transactionTemplate) {
         this.identifierGenerator = identifierGenerator;
         this.postManager = postManager;
         this.postImageManager = postImageManager;
         this.likeCountCache = likeCountCache;
+        this.feedCache = feedCache;
+        this.feedUserClient = feedUserClient;
         this.transactionTemplate = transactionTemplate;
     }
 
@@ -94,8 +105,12 @@ public class PostService {
         try {
             List<PostImageEntity> bindableImages = postImageManager.prepareBindableImages(
                     validCommand.authorId(), validCommand.imageNos());
-            return Objects.requireNonNull(transactionTemplate.execute(status ->
+            CreatePostResult result = Objects.requireNonNull(transactionTemplate.execute(status ->
                     createPostInTransaction(validCommand, requestHash, bindableImages)));
+            if (!result.duplicated()) {
+                cacheNewFeedCandidate(validCommand.authorId(), result.postNo());
+            }
+            return result;
         } catch (DuplicateKeyException ex) {
             return recoverConcurrentIdempotentResult(validCommand, requestHash, ex);
         } catch (BusinessException ex) {
@@ -296,6 +311,34 @@ public class PostService {
             log.warn("批量读取点赞 Redis delta 失败，postCount={}, errorType={}, errorMessage={}",
                     posts.size(), ex.getClass().getSimpleName(), ex.getMessage());
             return Map.of();
+        }
+    }
+
+    /**
+     * 发帖成功后写入新帖 Feed 候选缓存；失败不影响发帖结果。
+     *
+     * @param authorId 作者 ID
+     * @param postNo 帖子业务号
+     */
+    private void cacheNewFeedCandidate(Long authorId, Long postNo) {
+        try {
+            PostEntity post = postManager.findByPostNo(postNo);
+            if (post == null || post.getStatus() != PostStatus.PUBLISHED) {
+                return;
+            }
+            feedCache.saveLikedAuthorLatestPost(authorId, post.getPostNo());
+            Optional<UserGender> authorGender = feedCache.findCachedGender(authorId);
+            if (authorGender.isEmpty()) {
+                authorGender = feedUserClient.findGender(authorId);
+                authorGender.ifPresent(gender -> feedCache.cacheGender(authorId, gender));
+            }
+            if (authorGender.isEmpty()) {
+                return;
+            }
+            feedCache.addNewPost(authorGender.orElseThrow(), post.getPostNo(), post.getPublishedAt());
+        } catch (RuntimeException ex) {
+            log.warn("写入新帖 Feed 候选失败，postNo={}, authorId={}, errorType={}, errorMessage={}",
+                    postNo, authorId, ex.getClass().getSimpleName(), ex.getMessage());
         }
     }
 

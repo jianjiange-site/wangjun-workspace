@@ -3,6 +3,7 @@ package site.jianjiange.postservice.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
@@ -11,12 +12,14 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.isNull;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,7 +28,9 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import site.jianjiange.postservice.cache.FeedCache;
 import site.jianjiange.postservice.cache.LikeCountCache;
+import site.jianjiange.postservice.client.FeedUserClient;
 import site.jianjiange.postservice.constant.DatabaseSentinel;
 import site.jianjiange.postservice.entity.IdempotentRequestEntity;
 import site.jianjiange.postservice.entity.PostEntity;
@@ -70,6 +75,12 @@ class PostServiceTest {
     @MockBean
     private LikeCountCache likeCountCache;
 
+    @MockBean
+    private FeedCache feedCache;
+
+    @MockBean
+    private FeedUserClient feedUserClient;
+
     @Autowired
     private IdempotentRequestMapper idempotentRequestMapper;
 
@@ -85,6 +96,8 @@ class PostServiceTest {
             assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
             return new ObjectMetadata("image/jpeg", 1024L, "etag-test");
         }).when(objectStorageClient).statObject(any(), any());
+        when(feedCache.findCachedGender(anyLong())).thenReturn(Optional.empty());
+        when(feedUserClient.findGender(anyLong())).thenReturn(Optional.empty());
     }
 
     /**
@@ -118,6 +131,7 @@ class PostServiceTest {
                 .eq(PostImageEntity::getPostNo, post.getPostNo())))
                 .extracting(PostImageEntity::getStatus)
                 .containsExactly(ImageStatus.BOUND, ImageStatus.BOUND);
+        verify(feedCache).saveLikedAuthorLatestPost(9001L, result.postNo());
     }
 
     /**
