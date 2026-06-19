@@ -30,6 +30,8 @@ import site.jianjiange.postservice.storage.ObjectStorageObjectNotFoundException;
 public class PostImageManager {
 
     private static final int MAX_IMAGE_COUNT = 9;
+    private static final int MIN_CLEAN_BATCH_LIMIT = 1;
+    private static final int MAX_CLEAN_BATCH_LIMIT = 500;
     private static final Set<String> ALLOWED_CONTENT_TYPES = Set.of(
             "image/jpeg",
             "image/png",
@@ -116,6 +118,15 @@ public class PostImageManager {
     }
 
     /**
+     * 创建 TEMP 图片记录，供客户端获取上传 URL 后直传对象存储。
+     *
+     * @param image 图片实体
+     */
+    public void createTempImage(PostImageEntity image) {
+        postImageMapper.insert(image);
+    }
+
+    /**
      * 查询帖子绑定图片列表。
      *
      * @param postNo 帖子业务号
@@ -147,6 +158,96 @@ public class PostImageManager {
                         PostImageEntity::getPostNo,
                         LinkedHashMap::new,
                         Collectors.toList()));
+    }
+
+    /**
+     * 认领已过期 TEMP 图片或可重试的删除失败图片，并将其置为 CLEANING。
+     *
+     * @param now 当前时间
+     * @param limit 最大认领数量
+     * @param maxRetryCount 最大删除重试次数
+     * @return 本次成功认领的图片列表
+     */
+    public List<PostImageEntity> claimCleanableImages(OffsetDateTime now, int limit, int maxRetryCount) {
+        int safeLimit = Math.max(MIN_CLEAN_BATCH_LIMIT, Math.min(limit, MAX_CLEAN_BATCH_LIMIT));
+        List<PostImageEntity> candidates = postImageMapper.selectList(new LambdaQueryWrapper<PostImageEntity>()
+                .and(wrapper -> wrapper
+                        .nested(temp -> temp
+                                .eq(PostImageEntity::getStatus, ImageStatus.TEMP)
+                                .le(PostImageEntity::getUploadExpireAt, now))
+                        .or(failed -> failed
+                                .eq(PostImageEntity::getStatus, ImageStatus.DELETE_FAILED)
+                                .lt(PostImageEntity::getRetryCount, maxRetryCount)))
+                .orderByAsc(PostImageEntity::getUploadExpireAt, PostImageEntity::getId)
+                .last("LIMIT " + safeLimit));
+        if (candidates.isEmpty()) {
+            return List.of();
+        }
+
+        List<PostImageEntity> claimedImages = new ArrayList<>();
+        for (PostImageEntity image : candidates) {
+            int updated = postImageMapper.update(null, new LambdaUpdateWrapper<PostImageEntity>()
+                    .eq(PostImageEntity::getId, image.getId())
+                    .eq(PostImageEntity::getStatus, image.getStatus())
+                    .eq(PostImageEntity::getRetryCount, image.getRetryCount())
+                    .set(PostImageEntity::getStatus, ImageStatus.CLEANING)
+                    .set(PostImageEntity::getUpdatedAt, now));
+            if (updated == 1) {
+                image.setStatus(ImageStatus.CLEANING);
+                image.setUpdatedAt(now);
+                claimedImages.add(image);
+            }
+        }
+        return List.copyOf(claimedImages);
+    }
+
+    /**
+     * 将长时间停留在 CLEANING 的图片退回 DELETE_FAILED，避免任务中断后永久卡住。
+     *
+     * @param staleBefore 早于该时间的 CLEANING 记录视为卡住
+     * @param now 当前时间
+     * @param maxRetryCount 最大删除重试次数
+     * @return 被退回的记录数
+     */
+    public int markStaleCleaningFailed(OffsetDateTime staleBefore, OffsetDateTime now, int maxRetryCount) {
+        return postImageMapper.update(null, new LambdaUpdateWrapper<PostImageEntity>()
+                .eq(PostImageEntity::getStatus, ImageStatus.CLEANING)
+                .lt(PostImageEntity::getUpdatedAt, staleBefore)
+                .lt(PostImageEntity::getRetryCount, maxRetryCount)
+                .set(PostImageEntity::getStatus, ImageStatus.DELETE_FAILED)
+                .set(PostImageEntity::getUpdatedAt, now)
+                .setSql("retry_count = retry_count + 1"));
+    }
+
+    /**
+     * 标记图片对象清理完成。
+     *
+     * @param imageId 图片技术主键
+     * @param now 当前时间
+     * @return 更新成功返回 true
+     */
+    public boolean markImageCleaned(Long imageId, OffsetDateTime now) {
+        return postImageMapper.update(null, new LambdaUpdateWrapper<PostImageEntity>()
+                .eq(PostImageEntity::getId, imageId)
+                .eq(PostImageEntity::getStatus, ImageStatus.CLEANING)
+                .set(PostImageEntity::getStatus, ImageStatus.CLEANED)
+                .set(PostImageEntity::getUpdatedAt, now)) == 1;
+    }
+
+    /**
+     * 标记图片对象删除失败，并增加重试次数。
+     *
+     * @param imageId 图片技术主键
+     * @param now 当前时间
+     * @return 更新成功返回 true
+     */
+    public boolean markImageDeleteFailed(Long imageId, OffsetDateTime now) {
+        return postImageMapper.update(null, new LambdaUpdateWrapper<PostImageEntity>()
+                .eq(PostImageEntity::getId, imageId)
+                .eq(PostImageEntity::getStatus, ImageStatus.CLEANING)
+                .set(PostImageEntity::getStatus, ImageStatus.DELETE_FAILED)
+                .set(PostImageEntity::getUpdatedAt, now)
+                .setSql("retry_count = retry_count + 1")) == 1;
     }
 
     /**

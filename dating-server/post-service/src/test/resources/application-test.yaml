@@ -31,6 +31,7 @@ dating:
     temp-retention: 24h
   grpc:
     server-port: 9091
+    server-enabled: false
     client-deadline: 3s
     profile-service-name: wangjun-profile-service
 

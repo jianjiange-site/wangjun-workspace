@@ -212,7 +212,7 @@ class FeedServiceTest {
         when(feedCache.listNewPostNosBefore(eq(UserGender.MALE), any(), anyInt())).thenReturn(List.of());
         when(feedUserClient.listLikedUserIds(1001L)).thenReturn(List.of());
         FeedPageResult page = feedService.getFeed(new GetFeedCommand(1001L, "", false));
-        String tamperedCursor = page.nextCursor().substring(0, page.nextCursor().length() - 1) + "x";
+        String tamperedCursor = page.nextCursor() + "x";
 
         assertThatThrownBy(() -> feedService.getFeed(new GetFeedCommand(1001L, tamperedCursor, false)))
                 .isInstanceOf(BusinessException.class);
