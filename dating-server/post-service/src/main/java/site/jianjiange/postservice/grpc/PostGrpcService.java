@@ -4,7 +4,7 @@ import com.google.protobuf.Empty;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import java.util.List;
-import org.springframework.stereotype.Component;
+import net.devh.boot.grpc.server.service.GrpcService;
 import site.jianjiange.postservice.converter.PostProtoConverter;
 import site.jianjiange.postservice.proto.CreatePostRequest;
 import site.jianjiange.postservice.proto.CreatePostResponse;
@@ -27,7 +27,7 @@ import site.jianjiange.postservice.service.result.PostResult;
 /**
  * 帖子和 Feed gRPC 入口层。
  */
-@Component
+@GrpcService
 public class PostGrpcService extends PostServiceGrpc.PostServiceImplBase {
 
     private final PostService postService;

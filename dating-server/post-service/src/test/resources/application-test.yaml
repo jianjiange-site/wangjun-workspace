@@ -30,10 +30,12 @@ dating:
     upload-url-ttl: 10m
     temp-retention: 24h
   grpc:
-    server-port: 9091
-    server-enabled: false
     client-deadline: 3s
     profile-service-name: wangjun-profile-service
+
+grpc:
+  server:
+    port: 0
 
 mybatis-plus:
   configuration:

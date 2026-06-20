@@ -44,8 +44,6 @@ dating:
     upload-url-ttl: 10m
     temp-retention: 24h
   grpc:
-    server-port: ${GRPC_SERVER_PORT:9091}
-    server-enabled: true
     client-deadline: 3s
     profile-service-name: ${PROFILE_GRPC_SERVICE_NAME:wangjun-profile-service}
 

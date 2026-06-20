@@ -2,7 +2,7 @@ package site.jianjiange.postservice.grpc;
 
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
-import org.springframework.stereotype.Component;
+import net.devh.boot.grpc.server.service.GrpcService;
 import site.jianjiange.postservice.converter.GrpcTimeConverter;
 import site.jianjiange.postservice.converter.ImageProtoConverter;
 import site.jianjiange.postservice.proto.CreateImageUploadUrlRequest;
@@ -19,7 +19,7 @@ import site.jianjiange.postservice.service.result.PostResult;
 /**
  * 图片媒体 gRPC 入口层。
  */
-@Component
+@GrpcService
 public class MediaGrpcService extends MediaServiceGrpc.MediaServiceImplBase {
 
     private final PostService postService;

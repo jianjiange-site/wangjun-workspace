@@ -3,7 +3,7 @@ package site.jianjiange.postservice.grpc;
 import com.google.protobuf.Empty;
 import io.grpc.stub.StreamObserver;
 import java.time.OffsetDateTime;
-import org.springframework.stereotype.Component;
+import net.devh.boot.grpc.server.service.GrpcService;
 import site.jianjiange.postservice.constant.DatabaseSentinel;
 import site.jianjiange.postservice.converter.CommentProtoConverter;
 import site.jianjiange.postservice.converter.GrpcTimeConverter;
@@ -29,7 +29,7 @@ import site.jianjiange.postservice.service.result.LikePostResult;
 /**
  * 点赞和评论 gRPC 入口层。
  */
-@Component
+@GrpcService
 public class InteractionGrpcService extends InteractionServiceGrpc.InteractionServiceImplBase {
 
     private final LikeService likeService;

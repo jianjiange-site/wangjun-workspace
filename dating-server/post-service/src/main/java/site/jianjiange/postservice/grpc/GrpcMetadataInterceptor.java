@@ -6,12 +6,12 @@ import io.grpc.Metadata;
 import io.grpc.ServerCall;
 import io.grpc.ServerCallHandler;
 import io.grpc.ServerInterceptor;
-import org.springframework.stereotype.Component;
+import net.devh.boot.grpc.server.interceptor.GrpcGlobalServerInterceptor;
 
 /**
  * 将网关传入的 gRPC metadata 提取到当前调用 Context。
  */
-@Component
+@GrpcGlobalServerInterceptor
 public class GrpcMetadataInterceptor implements ServerInterceptor {
 
     @Override
