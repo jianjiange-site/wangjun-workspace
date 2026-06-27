@@ -1,0 +1,25 @@
+gateway:
+  redis:
+    key-prefix: dating:mobile-gateway
+  id-generator:
+    worker-id: 1
+    datacenter-id: 1
+  hash:
+    version: 1
+    phone-secret: ${PHONE_HASH_SECRET}
+    google-subject-secret: ${GOOGLE_SUBJECT_HASH_SECRET}
+    device-secret: ${DEVICE_HASH_SECRET}
+    refresh-token-secret: ${REFRESH_TOKEN_HASH_SECRET}
+  cors:
+    allowed-origins:
+      - http://localhost:3000
+  rate-limit:
+    enabled: true
+    window-seconds: 60
+    max-requests: 120
+    fail-open: true
+  grpc:
+    user-service:
+      host: localhost
+      port: 9090
+      deadline-ms: 1000

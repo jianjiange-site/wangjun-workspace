@@ -1,0 +1,104 @@
+spring:
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    url: jdbc:h2:mem:mobile_gateway_test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  flyway:
+    enabled: true
+  sql:
+    init:
+      mode: never
+  cloud:
+    nacos:
+      config:
+        enabled: false
+        import-check:
+          enabled: false
+      discovery:
+        enabled: false
+
+server:
+  port: 0
+
+gateway:
+  redis:
+    key-prefix: dating:mobile-gateway-test
+  id-generator:
+    worker-id: 1
+    datacenter-id: 1
+  hash:
+    version: 1
+    phone-secret: test-phone-secret
+    google-subject-secret: test-google-secret
+    device-secret: test-device-secret
+    refresh-token-secret: test-refresh-secret
+  cors:
+    allowed-origins:
+      - http://localhost:3000
+    allowed-methods:
+      - GET
+      - POST
+      - OPTIONS
+    allowed-headers:
+      - "*"
+    exposed-headers:
+      - X-Trace-Id
+    allow-credentials: true
+    max-age-seconds: 3600
+  rate-limit:
+    enabled: false
+    window-seconds: 60
+    max-requests: 3
+    fail-open: true
+  grpc:
+    user-service:
+      host: localhost
+      port: 9090
+      deadline-ms: 100
+  jwt:
+    issuer: dating-mobile-gateway-test
+    access-token-ttl-seconds: 900
+    refresh-token-ttl-seconds: 2592000
+    private-key: |
+      -----BEGIN PRIVATE KEY-----
+      MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQClUAH1FbU7bBxP
+      Vg/FxTX0/bHfijU216DwThH9TcgAq1+LLfNsKAedCOtGDrhxXNhbsS6D0nwKVc/M
+      0x3c63T+hNX09nQWQ+HWW6KgGg+MK/cH1ri/GuyiE92jSeYLyxCkMEsk0ZwBjq+Y
+      SXiux67gVGTipPFLIHlwX2bIZGBwNELARTYiVQYxcog8moiJjNLQSg6stVn8GC++
+      nSdVdQb02ifY51LwGQdPfwYY1GZCKea6pwhlGRr5hR/t3VfmuFN2+mW8AaaK4kQI
+      KF7fbJgK9N76xeSAvntRkgFvkxEQDlbSMPMtThq87/r7SsBYL7NvpR78/D9VTXbX
+      qjD8GBoXAgMBAAECggEAB8eD3uw0GKCzucfDhGSyE/m5LqR63nUJ+AdOyCDhRYLL
+      DHNPoHOQXUyHpmtqNL00tZR9varFJNldpvZm9rf9lRmAw8ho/ok80ofwIJekyzs7
+      2ZFe3Cf8IleVIHOJdaYvxxSDk5zFTHG/uqtlTyFve4pWT52JVIGFN8JWs0IrI1o9
+      ldIRNYnj4yXYaXAnQEwscC3llO6cC1tvexBTBRRFigMmZgZHhmoxY5K//oz1+FkN
+      P+pZXf7FXz26ycEf6thIYMM0JFvQPErcb5AkuFcIMTeVZ4aeH7C0beu1KnBn1cgE
+      TWRmQDvqckD7GJr1jC2sMAx3NF3GojRWTpnuQQVWWQKBgQC1mJFGrSjvLBOvMnIY
+      OOUcPaZ5m3diw6zCcg7LklndpfqoPiXLoNiSmi1ogl7+y8DFQPTCsYEEZ2HfKxgU
+      /vLD3UxZmVkZiCIK/50sL7ycCPHZbz0/Jd+NcveDMePxEmR/FsUMapoLyLAnQBaW
+      tXpBTQjmjN+UCSUSpqRdPPBKGQKBgQDpC3xOZzZ9YKQqaqFt/rQjhSJmyAaVh5ek
+      R4zjE+a2+MjsBurVFUDQ6b58V5Wb9OxyJ7ZyVLAKc2eeaXlUxCsz1owHQCW90/Ta
+      pg+fz/riQsmwb5OJfgtkrxINRJRhPJzqkggXWaTaZwTJLqTzZA5AOsIuX1ieOz6Z
+      y6a7EWVrrwKBgQCGP+5Ws7kpaAp9YOvcYGNwh1tFV9vg1gwoDC5H7UAmjohKTPeg
+      HJ8/cl/TfV5BO9yddzH7pUJeQRen5rH9A6Xxiu7g5m9qYqvYObS2b+wd5rb1Kjm7
+      L4KfjbjR8tYy6IgHNIwka8LKp2ki+0w3yp5BHHRSDR9Uz5XqveuRSnXSMQKBgEsC
+      PWJm6iz0vCJC6+6heo2sPmRioWvjlrVzqi80qp/d952wpEktbA1SDtOqxSbLcIdV
+      rO2jwH28o29jd4AHG/i1Z6C1zvAIltkBdin0IUZOROibIRuyDCy+BMtsdW3Ouprt
+      odkSK3N4kRvH/aOxYrzdrL6MRdO4MfACkonHkaNVAoGBAIwfCoGgtgJ+vQBG2b3u
+      GRJZPqQc43u9IyQgUHM/so7H1m9isB13rkaikBJQi2th7QSqPGtO4IX5IulWPSpQ
+      CU0ecABW53e+KY5yRMCTBHOCHwh0D7YuLq3YxX6iTD+db6tUIx6Cs0jRkVuEYOB/
+      QfieaC/s0Tuuczn/GJ7oGgS0
+      -----END PRIVATE KEY-----
+    public-key: |
+      -----BEGIN PUBLIC KEY-----
+      MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApVAB9RW1O2wcT1YPxcU1
+      9P2x34o1Nteg8E4R/U3IAKtfiy3zbCgHnQjrRg64cVzYW7Eug9J8ClXPzNMd3Ot0
+      /oTV9PZ0FkPh1luioBoPjCv3B9a4vxrsohPdo0nmC8sQpDBLJNGcAY6vmEl4rseu
+      4FRk4qTxSyB5cF9myGRgcDRCwEU2IlUGMXKIPJqIiYzS0EoOrLVZ/Bgvvp0nVXUG
+      9Non2OdS8BkHT38GGNRmQinmuqcIZRka+YUf7d1X5rhTdvplvAGmiuJECChe32yY
+      CvTe+sXkgL57UZIBb5MREA5W0jDzLU4avO/6+0rAWC+zb6Ue/Pw/VU1216ow/Bga
+      FwIDAQAB
+      -----END PUBLIC KEY-----

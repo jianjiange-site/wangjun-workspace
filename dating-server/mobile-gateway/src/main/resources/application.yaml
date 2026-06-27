@@ -1,0 +1,93 @@
+spring:
+  application:
+    name: mobile-gateway
+
+  profiles:
+    active: dev
+
+  threads:
+    virtual:
+      enabled: true
+
+  cloud:
+    nacos:
+      server-addr: ${NACOS_SERVER_ADDR:38.76.188.242:8848}
+      username: ${NACOS_USERNAME:nacos}
+      password: ${NACOS_PASSWORD:jianjiange}
+      config:
+        enabled: true
+        import-check:
+          enabled: false
+        namespace: ${NACOS_NAMESPACE:wangjun-dating-dev}
+        group: ${NACOS_GROUP:DEFAULT_GROUP}
+        file-extension: yml
+      discovery:
+        enabled: true
+        namespace: ${NACOS_NAMESPACE:wangjun-dating-dev}
+        group: ${NACOS_GROUP:DEFAULT_GROUP}
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+server:
+  port: ${SERVER_PORT:8080}
+
+gateway:
+  redis:
+    key-prefix: ${GATEWAY_REDIS_KEY_PREFIX:dating:mobile-gateway}
+  id-generator:
+    worker-id: ${GATEWAY_ID_WORKER_ID:1}
+    datacenter-id: ${GATEWAY_ID_DATACENTER_ID:1}
+  hash:
+    version: ${GATEWAY_HASH_VERSION:1}
+    phone-secret: ${PHONE_HASH_SECRET:}
+    google-subject-secret: ${GOOGLE_SUBJECT_HASH_SECRET:}
+    device-secret: ${DEVICE_HASH_SECRET:}
+    refresh-token-secret: ${REFRESH_TOKEN_HASH_SECRET:}
+  cors:
+    allowed-origins:
+      - ${GATEWAY_CORS_ALLOWED_ORIGIN:http://localhost:3000}
+    allowed-methods:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+      - OPTIONS
+    allowed-headers:
+      - "*"
+    exposed-headers:
+      - X-Trace-Id
+    allow-credentials: true
+    max-age-seconds: 3600
+  rate-limit:
+    enabled: true
+    window-seconds: 60
+    max-requests: 120
+    fail-open: true
+  grpc:
+    user-service:
+      host: ${USER_SERVICE_GRPC_HOST:localhost}
+      port: ${USER_SERVICE_GRPC_PORT:9090}
+      deadline-ms: 1000
+  jwt:
+    issuer: ${JWT_ISSUER:dating-mobile-gateway}
+    access-token-ttl-seconds: ${JWT_ACCESS_TOKEN_TTL_SECONDS:900}
+    refresh-token-ttl-seconds: ${JWT_REFRESH_TOKEN_TTL_SECONDS:2592000}
+    private-key: ${JWT_PRIVATE_KEY:}
+    public-key: ${JWT_PUBLIC_KEY:}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+---
+spring:
+  config:
+    activate:
+      on-profile: dev
+    import:
+      - optional:nacos:mobile-gateway-dev.yml
