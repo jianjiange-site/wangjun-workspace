@@ -1,5 +1,6 @@
 package site.jianjiange.mobilegateway.manager;
 
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 
@@ -94,6 +95,29 @@ public class RefreshTokenManager {
         } catch (Exception exception) {
             log.warn("Refresh token Redis cache write failed, jti={}", refreshTokenJti, exception);
         }
+    }
+
+    /**
+     * 撤销当前账号、用户和设备下的活跃 refresh token 会话。
+     *
+     * @param accountId 账号业务 ID
+     * @param userId 用户业务 ID
+     * @param deviceId 设备业务 ID
+     * @return 更新记录数
+     */
+    @Transactional
+    public int revokeActiveSession(long accountId, long userId, long deviceId) {
+        OffsetDateTime now = OffsetDateTime.now(java.time.ZoneOffset.UTC);
+        GatewayRefreshTokenEntity update = new GatewayRefreshTokenEntity();
+        update.setStatus(AuthConstants.REFRESH_STATUS_REVOKED);
+        update.setRevokedAt(now);
+        update.setUpdatedAt(now);
+        return refreshTokenMapper.update(update, new LambdaUpdateWrapper<GatewayRefreshTokenEntity>()
+                .eq(GatewayRefreshTokenEntity::getAccountId, accountId)
+                .eq(GatewayRefreshTokenEntity::getUserId, userId)
+                .eq(GatewayRefreshTokenEntity::getDeviceId, deviceId)
+                .eq(GatewayRefreshTokenEntity::getStatus, AuthConstants.REFRESH_STATUS_ACTIVE)
+                .eq(GatewayRefreshTokenEntity::getDeleted, AuthConstants.DELETED_NO));
     }
 
     /**

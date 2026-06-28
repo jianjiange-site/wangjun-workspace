@@ -7,6 +7,8 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+import site.jianjiange.mobilegateway.context.AuthContext;
+import site.jianjiange.mobilegateway.context.AuthContextHolder;
 import site.jianjiange.mobilegateway.enums.ResultCode;
 import site.jianjiange.mobilegateway.exception.BusinessException;
 
@@ -43,6 +45,24 @@ class TestEndpointController {
     @PostMapping("/test/valid")
     Map<String, String> valid(@Valid @RequestBody TestRequest request) {
         return Map.of("name", request.name());
+    }
+
+    /**
+     * 返回认证上下文，用于验证 JWT filter 注入行为。
+     *
+     * @return 当前认证上下文中的核心 ID
+     */
+    @GetMapping("/api/v1/test/protected")
+    Map<String, Object> protectedEndpoint() {
+        AuthContext context = AuthContextHolder.get();
+        if (context == null) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED);
+        }
+        return Map.of(
+                "user_id", context.userId(),
+                "account_id", context.accountId(),
+                "device_id", context.deviceId(),
+                "trace_id", context.traceId());
     }
 
     /**

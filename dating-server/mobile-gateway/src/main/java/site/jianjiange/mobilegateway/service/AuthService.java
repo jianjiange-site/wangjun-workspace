@@ -1,11 +1,17 @@
 package site.jianjiange.mobilegateway.service;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import site.jianjiange.mobilegateway.client.UserGrpcClient;
+import site.jianjiange.mobilegateway.context.AuthContext;
 import site.jianjiange.mobilegateway.entity.GatewayAccountEntity;
 import site.jianjiange.mobilegateway.entity.GatewayDeviceEntity;
 import site.jianjiange.mobilegateway.enums.ResultCode;
@@ -14,6 +20,7 @@ import site.jianjiange.mobilegateway.manager.AuthConstants;
 import site.jianjiange.mobilegateway.manager.GatewayAccountManager;
 import site.jianjiange.mobilegateway.manager.GatewayDeviceManager;
 import site.jianjiange.mobilegateway.manager.RefreshTokenManager;
+import site.jianjiange.mobilegateway.support.RedisKeyFactory;
 import site.jianjiange.mobilegateway.vo.LoginTokenVO;
 
 /**
@@ -22,11 +29,15 @@ import site.jianjiange.mobilegateway.vo.LoginTokenVO;
 @Service
 public class AuthService {
 
+    private static final Logger log = LoggerFactory.getLogger(AuthService.class);
+
     private final GatewayAccountManager accountManager;
     private final GatewayDeviceManager deviceManager;
     private final UserGrpcClient userGrpcClient;
     private final JwtService jwtService;
     private final RefreshTokenManager refreshTokenManager;
+    private final StringRedisTemplate redisTemplate;
+    private final RedisKeyFactory redisKeyFactory;
 
     /**
      * 创建认证编排服务。
@@ -36,15 +47,20 @@ public class AuthService {
      * @param userGrpcClient user-service gRPC 客户端
      * @param jwtService JWT 签发服务
      * @param refreshTokenManager refresh token 管理器
+     * @param redisTemplate Redis 字符串客户端
+     * @param redisKeyFactory Redis key 工厂
      */
     public AuthService(GatewayAccountManager accountManager, GatewayDeviceManager deviceManager,
                        UserGrpcClient userGrpcClient, JwtService jwtService,
-                       RefreshTokenManager refreshTokenManager) {
+                       RefreshTokenManager refreshTokenManager, StringRedisTemplate redisTemplate,
+                       RedisKeyFactory redisKeyFactory) {
         this.accountManager = accountManager;
         this.deviceManager = deviceManager;
         this.userGrpcClient = userGrpcClient;
         this.jwtService = jwtService;
         this.refreshTokenManager = refreshTokenManager;
+        this.redisTemplate = redisTemplate;
+        this.redisKeyFactory = redisKeyFactory;
     }
 
     /**
@@ -113,6 +129,19 @@ public class AuthService {
     }
 
     /**
+     * 退出当前会话，将当前 access token jti 写入 Redis blacklist，并撤销当前设备下活跃 refresh token。
+     *
+     * @param authContext 当前认证上下文
+     */
+    public void logout(AuthContext authContext) {
+        if (authContext == null) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED);
+        }
+        blacklistAccessToken(authContext);
+        refreshTokenManager.revokeActiveSession(authContext.accountId(), authContext.userId(), authContext.deviceId());
+    }
+
+    /**
      * 标记账号已完成 user-service 初始化。
      *
      * @param accountId 账号业务 ID
@@ -120,6 +149,25 @@ public class AuthService {
     @Transactional
     public void markUserRegisterDone(long accountId) {
         accountManager.markRegisterDone(accountId, OffsetDateTime.now(ZoneOffset.UTC));
+    }
+
+    /**
+     * 将 access token jti 写入 Redis blacklist，TTL 等于 access token 剩余有效期。
+     *
+     * @param authContext 当前认证上下文
+     */
+    private void blacklistAccessToken(AuthContext authContext) {
+        Duration ttl = Duration.between(Instant.now(), authContext.accessTokenExpiresAt());
+        if (!ttl.isPositive()) {
+            return;
+        }
+        String redisKey = redisKeyFactory.jwtBlacklist(authContext.accessTokenJti());
+        try {
+            redisTemplate.opsForValue().set(redisKey, "1", ttl);
+        } catch (Exception exception) {
+            log.warn("JWT blacklist Redis write failed, jti={}", authContext.accessTokenJti(), exception);
+            throw new BusinessException(ResultCode.TOKEN_BLACKLIST_UNAVAILABLE);
+        }
     }
 
     /**

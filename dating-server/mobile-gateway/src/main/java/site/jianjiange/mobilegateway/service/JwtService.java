@@ -32,7 +32,11 @@ import site.jianjiange.mobilegateway.exception.BusinessException;
 public class JwtService {
 
     private static final Base64.Encoder BASE64_URL_ENCODER = Base64.getUrlEncoder().withoutPadding();
+    private static final Base64.Decoder BASE64_URL_DECODER = Base64.getUrlDecoder();
     private static final String SIGNATURE_ALGORITHM = "SHA256withRSA";
+    private static final String JWT_ALGORITHM = "RS256";
+    private static final String JWT_HEADER_TYPE = "JWT";
+    private static final String ACCESS_TOKEN_TYPE = "access";
     private static final int REFRESH_TOKEN_RANDOM_BYTES = 32;
     private static final String REFRESH_TOKEN_PREFIX = "rt_";
 
@@ -107,8 +111,8 @@ public class JwtService {
                              OffsetDateTime issuedAt, OffsetDateTime expiresAt) {
         try {
             Map<String, Object> header = new LinkedHashMap<>();
-            header.put("alg", "RS256");
-            header.put("typ", "JWT");
+            header.put("alg", JWT_ALGORITHM);
+            header.put("typ", JWT_HEADER_TYPE);
             Map<String, Object> claims = new LinkedHashMap<>();
             claims.put("iss", config.getIssuer());
             claims.put("sub", String.valueOf(userId));
@@ -129,6 +133,138 @@ public class JwtService {
         } catch (Exception exception) {
             throw new BusinessException(ResultCode.TOKEN_KEY_UNAVAILABLE);
         }
+    }
+
+    /**
+     * 验证 access token 的结构、算法、签名、issuer、token 类型和过期时间。
+     *
+     * @param token 待验证 access token
+     * @return 验签后的核心 claim
+     */
+    public VerifiedAccessToken verifyAccessToken(String token) {
+        if (publicKey == null) {
+            throw new BusinessException(ResultCode.TOKEN_KEY_UNAVAILABLE);
+        }
+        String[] parts = splitToken(token);
+        Map<String, Object> header = decodeJsonPart(parts[0]);
+        requireValue(header, "alg", JWT_ALGORITHM);
+        requireValue(header, "typ", JWT_HEADER_TYPE);
+        if (!verifySignature(parts)) {
+            throw new BusinessException(ResultCode.ACCESS_TOKEN_INVALID);
+        }
+        Map<String, Object> claims = decodeJsonPart(parts[1]);
+        requireValue(claims, "iss", config.getIssuer());
+        requireValue(claims, "typ", ACCESS_TOKEN_TYPE);
+        long expiresAt = longClaim(claims, "exp");
+        if (Instant.now().getEpochSecond() >= expiresAt) {
+            throw new BusinessException(ResultCode.ACCESS_TOKEN_EXPIRED);
+        }
+        long userId = longClaim(claims, "user_id");
+        long accountId = longClaim(claims, "account_id");
+        long deviceId = longClaim(claims, "device_id");
+        String jti = stringClaim(claims, "jti");
+        return new VerifiedAccessToken(jti, accountId, userId, deviceId, Instant.ofEpochSecond(expiresAt));
+    }
+
+    /**
+     * 拆分 JWT 三段结构。
+     *
+     * @param token JWT 文本
+     * @return header、payload、signature 三段
+     */
+    private String[] splitToken(String token) {
+        if (!StringUtils.hasText(token)) {
+            throw new BusinessException(ResultCode.ACCESS_TOKEN_INVALID);
+        }
+        String[] parts = token.split("\\.", -1);
+        if (parts.length != 3 || !StringUtils.hasText(parts[0]) || !StringUtils.hasText(parts[1])
+                || !StringUtils.hasText(parts[2])) {
+            throw new BusinessException(ResultCode.ACCESS_TOKEN_INVALID);
+        }
+        return parts;
+    }
+
+    /**
+     * 解码 JWT JSON 段。
+     *
+     * @param part Base64 URL 编码段
+     * @return JSON map
+     */
+    private Map<String, Object> decodeJsonPart(String part) {
+        try {
+            return objectMapper.readValue(BASE64_URL_DECODER.decode(part),
+                    objectMapper.getTypeFactory().constructMapType(Map.class, String.class, Object.class));
+        } catch (Exception exception) {
+            throw new BusinessException(ResultCode.ACCESS_TOKEN_INVALID);
+        }
+    }
+
+    /**
+     * 校验 JWT header 或 claim 中的固定字符串值。
+     *
+     * @param values JSON map
+     * @param key 字段名
+     * @param expected 期望值
+     */
+    private void requireValue(Map<String, Object> values, String key, String expected) {
+        Object actual = values.get(key);
+        if (!(actual instanceof String value) || !expected.equals(value)) {
+            throw new BusinessException(ResultCode.ACCESS_TOKEN_INVALID);
+        }
+    }
+
+    /**
+     * 验证 JWT RS256 签名。
+     *
+     * @param parts JWT 三段结构
+     * @return 签名有效返回 true
+     */
+    private boolean verifySignature(String[] parts) {
+        try {
+            Signature verifier = Signature.getInstance(SIGNATURE_ALGORITHM);
+            verifier.initVerify(publicKey);
+            verifier.update((parts[0] + "." + parts[1]).getBytes(StandardCharsets.UTF_8));
+            return verifier.verify(BASE64_URL_DECODER.decode(parts[2]));
+        } catch (Exception exception) {
+            throw new BusinessException(ResultCode.ACCESS_TOKEN_INVALID);
+        }
+    }
+
+    /**
+     * 读取必填长整型 claim。
+     *
+     * @param claims JWT claims
+     * @param key 字段名
+     * @return claim 长整型值
+     */
+    private long longClaim(Map<String, Object> claims, String key) {
+        Object value = claims.get(key);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value instanceof String text && StringUtils.hasText(text)) {
+            try {
+                return Long.parseLong(text);
+            } catch (NumberFormatException exception) {
+                throw new BusinessException(ResultCode.ACCESS_TOKEN_INVALID);
+            }
+        }
+        throw new BusinessException(ResultCode.ACCESS_TOKEN_INVALID);
+    }
+
+    /**
+     * 读取必填字符串 claim。
+     *
+     * @param claims JWT claims
+     * @param key 字段名
+     * @return claim 字符串值
+     */
+    private String stringClaim(Map<String, Object> claims, String key) {
+        Object value = claims.get(key);
+        if (value instanceof String text && StringUtils.hasText(text)) {
+            return text;
+        }
+        throw new BusinessException(ResultCode.ACCESS_TOKEN_INVALID);
     }
 
     /**
@@ -232,5 +368,17 @@ public class JwtService {
         public Instant accessTokenExpiresInstant() {
             return accessTokenExpiresAt.toInstant();
         }
+    }
+
+    /**
+     * 验签后的 access token 核心信息。
+     *
+     * @param jti access token 唯一标识
+     * @param accountId 账号业务 ID
+     * @param userId 用户业务 ID
+     * @param deviceId 设备业务 ID
+     * @param expiresAt access token 过期时间
+     */
+    public record VerifiedAccessToken(String jti, long accountId, long userId, long deviceId, Instant expiresAt) {
     }
 }

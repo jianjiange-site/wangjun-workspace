@@ -46,6 +46,11 @@ public final class AuthConstants {
     public static final int REFRESH_STATUS_ACTIVE = 1;
 
     /**
+     * refresh token REVOKED 状态。
+     */
+    public static final int REFRESH_STATUS_REVOKED = 3;
+
+    /**
      * 禁止实例化常量类。
      */
     private AuthConstants() {
