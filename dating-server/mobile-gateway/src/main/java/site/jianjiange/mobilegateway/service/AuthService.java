@@ -129,6 +129,19 @@ public class AuthService {
     }
 
     /**
+     * 使用 refresh token 轮换并签发新 token。
+     *
+     * @param refreshToken refresh token 明文
+     * @return 新 token 响应
+     */
+    public LoginTokenVO refresh(String refreshToken) {
+        JwtService.IssuedTokens tokens = refreshTokenManager.rotate(refreshToken);
+        JwtService.VerifiedAccessToken verified = jwtService.verifyAccessToken(tokens.accessToken());
+        return new LoginTokenVO(tokens.accessToken(), tokens.refreshToken(), "Bearer",
+                tokens.expiresIn(), verified.userId());
+    }
+
+    /**
      * 退出当前会话，将当前 access token jti 写入 Redis blacklist，并撤销当前设备下活跃 refresh token。
      *
      * @param authContext 当前认证上下文

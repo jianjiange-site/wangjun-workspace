@@ -100,7 +100,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         if (!path.startsWith("/api/v1/")) {
             return true;
         }
-        return "/api/v1/auth/login/device".equals(path);
+        return "/api/v1/auth/login/device".equals(path) || "/api/v1/auth/refresh".equals(path);
     }
 
     /**

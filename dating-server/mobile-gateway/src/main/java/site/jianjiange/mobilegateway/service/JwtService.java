@@ -167,6 +167,28 @@ public class JwtService {
     }
 
     /**
+     * 解析 refresh token 的 jti 和随机 secret。
+     *
+     * @param token refresh token 明文
+     * @return refresh token 核心组成
+     */
+    public ParsedRefreshToken parseRefreshToken(String token) {
+        if (!StringUtils.hasText(token) || !token.startsWith(REFRESH_TOKEN_PREFIX)) {
+            throw new BusinessException(ResultCode.REFRESH_TOKEN_INVALID);
+        }
+        String[] parts = token.split("\\.", -1);
+        if (parts.length != 2 || !StringUtils.hasText(parts[0]) || !StringUtils.hasText(parts[1])) {
+            throw new BusinessException(ResultCode.REFRESH_TOKEN_INVALID);
+        }
+        String jti = parts[0].substring(REFRESH_TOKEN_PREFIX.length());
+        String secret = parts[1];
+        if (!StringUtils.hasText(jti) || jti.length() > 128 || secret.length() > 128) {
+            throw new BusinessException(ResultCode.REFRESH_TOKEN_INVALID);
+        }
+        return new ParsedRefreshToken(jti, secret);
+    }
+
+    /**
      * 拆分 JWT 三段结构。
      *
      * @param token JWT 文本
@@ -380,5 +402,14 @@ public class JwtService {
      * @param expiresAt access token 过期时间
      */
     public record VerifiedAccessToken(String jti, long accountId, long userId, long deviceId, Instant expiresAt) {
+    }
+
+    /**
+     * refresh token 明文解析结果。
+     *
+     * @param jti refresh token 唯一标识
+     * @param secret refresh token 随机 secret
+     */
+    public record ParsedRefreshToken(String jti, String secret) {
     }
 }

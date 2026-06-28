@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import site.jianjiange.mobilegateway.context.AuthContextHolder;
 import site.jianjiange.mobilegateway.dto.DeviceLoginRequest;
+import site.jianjiange.mobilegateway.dto.RefreshTokenRequest;
 import site.jianjiange.mobilegateway.service.AuthService;
 import site.jianjiange.mobilegateway.service.DeviceLoginService;
 import site.jianjiange.mobilegateway.vo.LoginTokenVO;
@@ -44,6 +45,17 @@ public class AuthController {
     public LoginTokenVO loginByDevice(@Valid @RequestBody DeviceLoginRequest request,
                                       HttpServletRequest servletRequest) {
         return deviceLoginService.login(request, servletRequest);
+    }
+
+    /**
+     * 使用 refresh token 刷新当前登录 token。
+     *
+     * @param request refresh token 请求体
+     * @return 新 token 信息
+     */
+    @PostMapping("/refresh")
+    public LoginTokenVO refresh(@Valid @RequestBody RefreshTokenRequest request) {
+        return authService.refresh(request.getRefreshToken());
     }
 
     /**
