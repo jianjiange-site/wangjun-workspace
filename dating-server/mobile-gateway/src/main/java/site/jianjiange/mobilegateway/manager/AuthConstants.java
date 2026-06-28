@@ -11,9 +11,19 @@ public final class AuthConstants {
     public static final String ACCOUNT_TYPE_DEVICE = "DEVICE";
 
     /**
+     * 手机号账号类型。
+     */
+    public static final String ACCOUNT_TYPE_PHONE = "PHONE";
+
+    /**
      * 设备快速登录注册来源。
      */
     public static final String REGISTER_SOURCE_DEVICE_LOGIN = "device_login";
+
+    /**
+     * 手机验证码登录注册来源。
+     */
+    public static final String REGISTER_SOURCE_PHONE_LOGIN = "phone_login";
 
     /**
      * 正常状态。

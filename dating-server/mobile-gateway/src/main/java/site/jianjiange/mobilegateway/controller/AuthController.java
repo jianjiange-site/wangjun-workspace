@@ -8,9 +8,13 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import site.jianjiange.mobilegateway.context.AuthContextHolder;
 import site.jianjiange.mobilegateway.dto.DeviceLoginRequest;
+import site.jianjiange.mobilegateway.dto.PhoneLoginRequest;
 import site.jianjiange.mobilegateway.dto.RefreshTokenRequest;
+import site.jianjiange.mobilegateway.dto.SendSmsCodeRequest;
 import site.jianjiange.mobilegateway.service.AuthService;
 import site.jianjiange.mobilegateway.service.DeviceLoginService;
+import site.jianjiange.mobilegateway.service.PhoneLoginService;
+import site.jianjiange.mobilegateway.service.SmsCodeService;
 import site.jianjiange.mobilegateway.vo.LoginTokenVO;
 
 /**
@@ -21,6 +25,8 @@ import site.jianjiange.mobilegateway.vo.LoginTokenVO;
 public class AuthController {
 
     private final DeviceLoginService deviceLoginService;
+    private final PhoneLoginService phoneLoginService;
+    private final SmsCodeService smsCodeService;
     private final AuthService authService;
 
     /**
@@ -29,9 +35,33 @@ public class AuthController {
      * @param deviceLoginService 设备快速登录服务
      * @param authService 认证编排服务
      */
-    public AuthController(DeviceLoginService deviceLoginService, AuthService authService) {
+    public AuthController(DeviceLoginService deviceLoginService, PhoneLoginService phoneLoginService,
+                          SmsCodeService smsCodeService, AuthService authService) {
         this.deviceLoginService = deviceLoginService;
+        this.phoneLoginService = phoneLoginService;
+        this.smsCodeService = smsCodeService;
         this.authService = authService;
+    }
+
+    /**
+     * 发送手机验证码。
+     *
+     * @param request 发送验证码请求
+     */
+    @PostMapping("/sms-code")
+    public void sendSmsCode(@Valid @RequestBody SendSmsCodeRequest request) {
+        smsCodeService.sendCode(request.getPhone());
+    }
+
+    /**
+     * 手机验证码登录或注册。
+     *
+     * @param request 手机登录请求
+     * @return 登录 token 信息
+     */
+    @PostMapping("/login/phone")
+    public LoginTokenVO loginByPhone(@Valid @RequestBody PhoneLoginRequest request) {
+        return phoneLoginService.login(request);
     }
 
     /**

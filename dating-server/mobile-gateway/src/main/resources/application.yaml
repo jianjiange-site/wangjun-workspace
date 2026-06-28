@@ -66,6 +66,11 @@ gateway:
     window-seconds: 60
     max-requests: 120
     fail-open: true
+  sms:
+    code-ttl-seconds: ${SMS_CODE_TTL_SECONDS:300}
+    cooldown-seconds: ${SMS_COOLDOWN_SECONDS:60}
+    fail-ttl-seconds: ${SMS_FAIL_TTL_SECONDS:900}
+    max-verify-failures: ${SMS_MAX_VERIFY_FAILURES:5}
   grpc:
     user-service:
       host: ${USER_SERVICE_GRPC_HOST:localhost}

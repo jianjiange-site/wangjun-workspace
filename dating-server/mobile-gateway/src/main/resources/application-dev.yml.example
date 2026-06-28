@@ -18,6 +18,11 @@ gateway:
     window-seconds: 60
     max-requests: 120
     fail-open: true
+  sms:
+    code-ttl-seconds: 300
+    cooldown-seconds: 60
+    fail-ttl-seconds: 900
+    max-verify-failures: 5
   grpc:
     user-service:
       host: localhost

@@ -4,8 +4,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -27,9 +27,8 @@ import site.jianjiange.mobilegateway.vo.LoginTokenVO;
  * 认证编排服务，负责本地认证域、user-service 初始化和 token 签发的流程衔接。
  */
 @Service
+@Slf4j
 public class AuthService {
-
-    private static final Logger log = LoggerFactory.getLogger(AuthService.class);
 
     private final GatewayAccountManager accountManager;
     private final GatewayDeviceManager deviceManager;
@@ -38,6 +37,7 @@ public class AuthService {
     private final RefreshTokenManager refreshTokenManager;
     private final StringRedisTemplate redisTemplate;
     private final RedisKeyFactory redisKeyFactory;
+    private static final long NO_DEVICE_ID = 0L;
 
     /**
      * 创建认证编排服务。
@@ -83,7 +83,7 @@ public class AuthService {
         GatewayAccountEntity account = accountManager.createDeviceAccount(deviceKeyHash, hashVersion, now);
         GatewayDeviceEntity device = deviceManager.createForAccount(account, deviceKeyHash, hashVersion,
                 deviceName, clientType, now);
-        return toIdentity(account, device);
+        return toIdentity(account, device.getDeviceId());
     }
 
     /**
@@ -101,16 +101,59 @@ public class AuthService {
     }
 
     /**
+     * 查找或创建手机号登录身份。
+     *
+     * @param phoneHash 手机号 HMAC hash
+     * @param hashVersion HMAC hash 版本
+     * @return 登录身份信息
+     */
+    @Transactional
+    public LoginIdentity findOrCreatePhoneIdentity(String phoneHash, int hashVersion) {
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        GatewayAccountEntity existingAccount = accountManager.findByTypeAndHash(AuthConstants.ACCOUNT_TYPE_PHONE,
+                phoneHash);
+        if (existingAccount != null) {
+            return existingAccountIdentity(existingAccount, now);
+        }
+        GatewayAccountEntity account = accountManager.createPhoneAccount(phoneHash, hashVersion, now);
+        return toIdentity(account,AuthService.NO_DEVICE_ID);
+    }
+
+    /**
+     * 手机号账号唯一键并发冲突后重新加载已创建身份。
+     *
+     * @param phoneHash 手机号 HMAC hash
+     * @return 登录身份信息
+     */
+    public LoginIdentity loadPhoneIdentityAfterConflict(String phoneHash) {
+        GatewayAccountEntity account = accountManager.findByTypeAndHash(AuthConstants.ACCOUNT_TYPE_PHONE, phoneHash);
+        if (account == null) {
+            throw new DuplicateKeyException("phone account conflict but account is not visible yet");
+        }
+        return existingAccountIdentity(account, OffsetDateTime.now(ZoneOffset.UTC));
+    }
+
+    /**
      * 确保 user-service 已按 user_id 完成幂等初始化。
      *
      * @param identity 登录身份信息
      */
     public void ensureUserInitialized(LoginIdentity identity) {
+        ensureUserInitialized(identity, AuthConstants.REGISTER_SOURCE_DEVICE_LOGIN);
+    }
+
+    /**
+     * 确保 user-service 已按 user_id 完成幂等初始化。
+     *
+     * @param identity 登录身份信息
+     * @param registerSource 注册来源
+     */
+    public void ensureUserInitialized(LoginIdentity identity, String registerSource) {
         if (identity.userRegisterStatus() == AuthConstants.REGISTER_STATUS_DONE) {
             return;
         }
         userGrpcClient.registerOrInitialize(identity.userId(), identity.accountType(),
-                AuthConstants.REGISTER_SOURCE_DEVICE_LOGIN);
+                registerSource);
         markUserRegisterDone(identity.accountId());
     }
 
@@ -203,18 +246,33 @@ public class AuthService {
         }
         deviceManager.touchLastSeen(device.getDeviceId(), now);
         accountManager.touchLastLogin(account.getAccountId(), now);
-        return toIdentity(account, device);
+        return toIdentity(account, device.getDeviceId());
+    }
+
+    /**
+     * 根据已存在账号恢复登录身份，并更新账号最近登录时间。
+     *
+     * @param account 已存在的账号记录
+     * @param now 当前业务时间
+     * @return 登录身份信息
+     */
+    private LoginIdentity existingAccountIdentity(GatewayAccountEntity account, OffsetDateTime now) {
+        if (account.getStatus() == AuthConstants.STATUS_DISABLED) {
+            throw new BusinessException(ResultCode.ACCOUNT_DISABLED);
+        }
+        accountManager.touchLastLogin(account.getAccountId(), now);
+        return toIdentity(account,AuthService.NO_DEVICE_ID);
     }
 
     /**
      * 将账号和设备实体压缩为后续认证流程需要的登录身份快照。
      *
      * @param account 网关账号实体
-     * @param device 网关设备实体
+     * @param deviceId 网关设备实体
      * @return 登录身份信息
      */
-    private LoginIdentity toIdentity(GatewayAccountEntity account, GatewayDeviceEntity device) {
-        return new LoginIdentity(account.getAccountId(), account.getUserId(), device.getDeviceId(),
+    private LoginIdentity toIdentity(GatewayAccountEntity account, Long deviceId) {
+        return new LoginIdentity(account.getAccountId(), account.getUserId(), deviceId,
                 account.getAccountType(), account.getUserRegisterStatus());
     }
 
