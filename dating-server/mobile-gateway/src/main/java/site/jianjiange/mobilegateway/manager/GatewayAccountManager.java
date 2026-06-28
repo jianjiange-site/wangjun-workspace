@@ -79,6 +79,18 @@ public class GatewayAccountManager {
     }
 
     /**
+     * 创建 Google 登录专用账号，并生成 account_id 和 user_id。
+     *
+     * @param accountKeyHash Google subject HMAC hash
+     * @param hashVersion HMAC hash 版本
+     * @param now 当前时间
+     * @return 新创建的账号实体
+     */
+    public GatewayAccountEntity createGoogleAccount(String accountKeyHash, int hashVersion, OffsetDateTime now) {
+        return createAccount(AuthConstants.ACCOUNT_TYPE_GOOGLE, accountKeyHash, hashVersion, now);
+    }
+
+    /**
      * 创建指定类型账号，并生成 account_id 和 user_id。
      *
      * @param accountType 账号类型

@@ -71,6 +71,11 @@ gateway:
     cooldown-seconds: ${SMS_COOLDOWN_SECONDS:60}
     fail-ttl-seconds: ${SMS_FAIL_TTL_SECONDS:900}
     max-verify-failures: ${SMS_MAX_VERIFY_FAILURES:5}
+  google:
+    client-id: ${GOOGLE_CLIENT_ID:}
+    jwks-uri: ${GOOGLE_JWKS_URI:https://www.googleapis.com/oauth2/v3/certs}
+    jwks-cache-ttl-seconds: ${GOOGLE_JWKS_CACHE_TTL_SECONDS:43200}
+    http-timeout-ms: ${GOOGLE_HTTP_TIMEOUT_MS:2000}
   grpc:
     user-service:
       host: ${USER_SERVICE_GRPC_HOST:localhost}

@@ -8,11 +8,13 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import site.jianjiange.mobilegateway.context.AuthContextHolder;
 import site.jianjiange.mobilegateway.dto.DeviceLoginRequest;
+import site.jianjiange.mobilegateway.dto.GoogleLoginRequest;
 import site.jianjiange.mobilegateway.dto.PhoneLoginRequest;
 import site.jianjiange.mobilegateway.dto.RefreshTokenRequest;
 import site.jianjiange.mobilegateway.dto.SendSmsCodeRequest;
 import site.jianjiange.mobilegateway.service.AuthService;
 import site.jianjiange.mobilegateway.service.DeviceLoginService;
+import site.jianjiange.mobilegateway.service.GoogleLoginService;
 import site.jianjiange.mobilegateway.service.PhoneLoginService;
 import site.jianjiange.mobilegateway.service.SmsCodeService;
 import site.jianjiange.mobilegateway.vo.LoginTokenVO;
@@ -26,6 +28,7 @@ public class AuthController {
 
     private final DeviceLoginService deviceLoginService;
     private final PhoneLoginService phoneLoginService;
+    private final GoogleLoginService googleLoginService;
     private final SmsCodeService smsCodeService;
     private final AuthService authService;
 
@@ -36,9 +39,11 @@ public class AuthController {
      * @param authService 认证编排服务
      */
     public AuthController(DeviceLoginService deviceLoginService, PhoneLoginService phoneLoginService,
-                          SmsCodeService smsCodeService, AuthService authService) {
+                          GoogleLoginService googleLoginService, SmsCodeService smsCodeService,
+                          AuthService authService) {
         this.deviceLoginService = deviceLoginService;
         this.phoneLoginService = phoneLoginService;
+        this.googleLoginService = googleLoginService;
         this.smsCodeService = smsCodeService;
         this.authService = authService;
     }
@@ -62,6 +67,17 @@ public class AuthController {
     @PostMapping("/login/phone")
     public LoginTokenVO loginByPhone(@Valid @RequestBody PhoneLoginRequest request) {
         return phoneLoginService.login(request);
+    }
+
+    /**
+     * Google ID token 登录或注册。
+     *
+     * @param request Google 登录请求
+     * @return 登录 token 信息
+     */
+    @PostMapping("/login/google")
+    public LoginTokenVO loginByGoogle(@Valid @RequestBody GoogleLoginRequest request) {
+        return googleLoginService.login(request);
     }
 
     /**

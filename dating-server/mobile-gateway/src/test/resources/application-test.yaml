@@ -59,6 +59,11 @@ gateway:
     cooldown-seconds: 60
     fail-ttl-seconds: 900
     max-verify-failures: 5
+  google:
+    client-id: test-google-client-id
+    jwks-uri: http://127.0.0.1:18080/oauth2/v3/certs
+    jwks-cache-ttl-seconds: 43200
+    http-timeout-ms: 1000
   grpc:
     user-service:
       host: localhost

@@ -16,6 +16,11 @@ public final class AuthConstants {
     public static final String ACCOUNT_TYPE_PHONE = "PHONE";
 
     /**
+     * Google 账号类型。
+     */
+    public static final String ACCOUNT_TYPE_GOOGLE = "GOOGLE";
+
+    /**
      * 设备快速登录注册来源。
      */
     public static final String REGISTER_SOURCE_DEVICE_LOGIN = "device_login";
@@ -24,6 +29,11 @@ public final class AuthConstants {
      * 手机验证码登录注册来源。
      */
     public static final String REGISTER_SOURCE_PHONE_LOGIN = "phone_login";
+
+    /**
+     * Google 登录注册来源。
+     */
+    public static final String REGISTER_SOURCE_GOOGLE_LOGIN = "google_login";
 
     /**
      * 正常状态。

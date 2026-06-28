@@ -120,6 +120,25 @@ public class AuthService {
     }
 
     /**
+     * 查找或创建 Google 登录身份。
+     *
+     * @param subjectHash Google subject HMAC hash
+     * @param hashVersion HMAC hash 版本
+     * @return 登录身份信息
+     */
+    @Transactional
+    public LoginIdentity findOrCreateGoogleIdentity(String subjectHash, int hashVersion) {
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        GatewayAccountEntity existingAccount = accountManager.findByTypeAndHash(AuthConstants.ACCOUNT_TYPE_GOOGLE,
+                subjectHash);
+        if (existingAccount != null) {
+            return existingAccountIdentity(existingAccount, now);
+        }
+        GatewayAccountEntity account = accountManager.createGoogleAccount(subjectHash, hashVersion, now);
+        return toIdentity(account, AuthService.NO_DEVICE_ID);
+    }
+
+    /**
      * 手机号账号唯一键并发冲突后重新加载已创建身份。
      *
      * @param phoneHash 手机号 HMAC hash
@@ -129,6 +148,20 @@ public class AuthService {
         GatewayAccountEntity account = accountManager.findByTypeAndHash(AuthConstants.ACCOUNT_TYPE_PHONE, phoneHash);
         if (account == null) {
             throw new DuplicateKeyException("phone account conflict but account is not visible yet");
+        }
+        return existingAccountIdentity(account, OffsetDateTime.now(ZoneOffset.UTC));
+    }
+
+    /**
+     * Google 账号唯一键并发冲突后重新加载已创建身份。
+     *
+     * @param subjectHash Google subject HMAC hash
+     * @return 登录身份信息
+     */
+    public LoginIdentity loadGoogleIdentityAfterConflict(String subjectHash) {
+        GatewayAccountEntity account = accountManager.findByTypeAndHash(AuthConstants.ACCOUNT_TYPE_GOOGLE, subjectHash);
+        if (account == null) {
+            throw new DuplicateKeyException("google account conflict but account is not visible yet");
         }
         return existingAccountIdentity(account, OffsetDateTime.now(ZoneOffset.UTC));
     }

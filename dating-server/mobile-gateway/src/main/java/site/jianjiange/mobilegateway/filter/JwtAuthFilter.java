@@ -102,6 +102,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         }
         return "/api/v1/auth/sms-code".equals(path)
                 || "/api/v1/auth/login/phone".equals(path)
+                || "/api/v1/auth/login/google".equals(path)
                 || "/api/v1/auth/login/device".equals(path)
                 || "/api/v1/auth/refresh".equals(path);
     }
