@@ -3,6 +3,7 @@ package site.jianjiange.mobilegateway.client;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.grpc.Metadata;
 import io.grpc.Server;
 import io.grpc.Status;
 import io.grpc.inprocess.InProcessChannelBuilder;
@@ -16,8 +17,11 @@ import org.junit.jupiter.api.Test;
 import site.jianjiange.mobilegateway.config.GrpcClientConfig;
 import site.jianjiange.mobilegateway.enums.ResultCode;
 import site.jianjiange.mobilegateway.exception.BusinessException;
+import site.jianjiange.mobilegateway.grpc.user.GetCurrentUserRequest;
+import site.jianjiange.mobilegateway.grpc.user.GetCurrentUserResponse;
 import site.jianjiange.mobilegateway.grpc.user.RegisterOrInitializeRequest;
 import site.jianjiange.mobilegateway.grpc.user.RegisterOrInitializeResponse;
+import site.jianjiange.mobilegateway.grpc.user.UserQueryServiceGrpc;
 import site.jianjiange.mobilegateway.grpc.user.UserRegisterServiceGrpc;
 import site.jianjiange.mobilegateway.support.TraceIdContext;
 
@@ -157,6 +161,96 @@ class UserGrpcClientTest {
     }
 
     /**
+     * 验证用户查询客户端能解析成功响应。
+     */
+    @Test
+    void getCurrentUserParsesSuccessfulResponse() throws Exception {
+        UserGrpcClient client = queryClientWithService(new UserQueryServiceGrpc.UserQueryServiceImplBase() {
+            /**
+             * 返回当前用户资料的 mock GetCurrentUser 实现。
+             *
+             * @param request 当前用户查询请求
+             * @param responseObserver gRPC 响应观察器
+             */
+            @Override
+            public void getCurrentUser(GetCurrentUserRequest request,
+                                       StreamObserver<GetCurrentUserResponse> responseObserver) {
+                assertThat(request.getUserId()).isEqualTo(1001L);
+                assertThat(request.getTraceId()).isEqualTo("trace-1");
+                responseObserver.onNext(GetCurrentUserResponse.newBuilder()
+                        .setUserId(request.getUserId())
+                        .setNickname("Alice")
+                        .setAvatarUrl("https://cdn.example.com/a.png")
+                        .setBio("hello")
+                        .build());
+                responseObserver.onCompleted();
+            }
+        }, 1000);
+
+        GetCurrentUserResponse response = client.getCurrentUser(GetCurrentUserRequest.newBuilder()
+                .setUserId(1001L)
+                .setTraceId("trace-1")
+                .build(), new Metadata());
+
+        assertThat(response.getUserId()).isEqualTo(1001L);
+        assertThat(response.getNickname()).isEqualTo("Alice");
+    }
+
+    /**
+     * 验证用户查询 deadline exceeded 会映射为 10701。
+     */
+    @Test
+    void getCurrentUserDeadlineExceededMapsToGrpcTimeoutCode() throws Exception {
+        UserGrpcClient client = queryClientWithService(new UserQueryServiceGrpc.UserQueryServiceImplBase() {
+            /**
+             * 返回 deadline exceeded 的 mock GetCurrentUser 实现。
+             *
+             * @param request 当前用户查询请求
+             * @param responseObserver gRPC 响应观察器
+             */
+            @Override
+            public void getCurrentUser(GetCurrentUserRequest request,
+                                       StreamObserver<GetCurrentUserResponse> responseObserver) {
+                responseObserver.onError(Status.DEADLINE_EXCEEDED.asRuntimeException());
+            }
+        }, 1000);
+
+        assertThatThrownBy(() -> client.getCurrentUser(GetCurrentUserRequest.newBuilder()
+                .setUserId(1001L)
+                .setTraceId("trace-1")
+                .build(), new Metadata()))
+                .isInstanceOfSatisfying(BusinessException.class, exception ->
+                        assertThat(exception.getResultCode()).isEqualTo(ResultCode.DOWNSTREAM_GRPC_TIMEOUT));
+    }
+
+    /**
+     * 验证用户查询普通 gRPC 异常会映射为 10702。
+     */
+    @Test
+    void getCurrentUserGrpcExceptionMapsToGrpcErrorCode() throws Exception {
+        UserGrpcClient client = queryClientWithService(new UserQueryServiceGrpc.UserQueryServiceImplBase() {
+            /**
+             * 返回 unavailable 异常的 mock GetCurrentUser 实现。
+             *
+             * @param request 当前用户查询请求
+             * @param responseObserver gRPC 响应观察器
+             */
+            @Override
+            public void getCurrentUser(GetCurrentUserRequest request,
+                                       StreamObserver<GetCurrentUserResponse> responseObserver) {
+                responseObserver.onError(Status.UNAVAILABLE.asRuntimeException());
+            }
+        }, 1000);
+
+        assertThatThrownBy(() -> client.getCurrentUser(GetCurrentUserRequest.newBuilder()
+                .setUserId(1001L)
+                .setTraceId("trace-1")
+                .build(), new Metadata()))
+                .isInstanceOfSatisfying(BusinessException.class, exception ->
+                        assertThat(exception.getResultCode()).isEqualTo(ResultCode.DOWNSTREAM_GRPC_ERROR));
+    }
+
+    /**
      * 使用指定 mock service 创建 user-service gRPC 客户端。
      *
      * @param service mock gRPC 服务实现
@@ -176,6 +270,29 @@ class UserGrpcClientTest {
         config.setDeadlineMs(deadlineMs);
         return new UserGrpcClient(
                 UserRegisterServiceGrpc.newBlockingStub(InProcessChannelBuilder.forName(serverName).directExecutor().build()),
+                config);
+    }
+
+    /**
+     * 使用指定 mock query service 创建 user-service gRPC 客户端。
+     *
+     * @param service mock gRPC 查询服务实现
+     * @param deadlineMs 客户端 deadline 毫秒数
+     * @return 指向内存 gRPC 查询服务的客户端
+     * @throws IOException 内存 gRPC 服务启动失败时抛出
+     */
+    private UserGrpcClient queryClientWithService(UserQueryServiceGrpc.UserQueryServiceImplBase service, long deadlineMs)
+            throws IOException {
+        String serverName = UUID.randomUUID().toString();
+        server = InProcessServerBuilder.forName(serverName)
+                .directExecutor()
+                .addService(service)
+                .build()
+                .start();
+        GrpcClientConfig config = new GrpcClientConfig();
+        config.setDeadlineMs(deadlineMs);
+        return new UserGrpcClient(
+                UserQueryServiceGrpc.newBlockingStub(InProcessChannelBuilder.forName(serverName).directExecutor().build()),
                 config);
     }
 }

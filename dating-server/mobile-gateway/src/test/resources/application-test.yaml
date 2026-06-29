@@ -66,6 +66,8 @@ gateway:
     http-timeout-ms: 1000
   grpc:
     user-service:
+      service-id: user-service
+      discovery-enabled: false
       host: localhost
       port: 9090
       deadline-ms: 100

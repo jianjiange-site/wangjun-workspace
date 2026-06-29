@@ -78,6 +78,8 @@ gateway:
     http-timeout-ms: ${GOOGLE_HTTP_TIMEOUT_MS:2000}
   grpc:
     user-service:
+      service-id: ${USER_SERVICE_NAME:user-service}
+      discovery-enabled: ${USER_SERVICE_DISCOVERY_ENABLED:true}
       host: ${USER_SERVICE_GRPC_HOST:localhost}
       port: ${USER_SERVICE_GRPC_PORT:9090}
       deadline-ms: 1000

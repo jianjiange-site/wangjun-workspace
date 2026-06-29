@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package dating.user.v1;
+
+option java_multiple_files = true;
+option java_package = "site.jianjiange.mobilegateway.grpc.user";
+option java_outer_classname = "UserRegisterProto";
+
+service UserRegisterService {
+  rpc RegisterOrInitialize(RegisterOrInitializeRequest) returns (RegisterOrInitializeResponse);
+}
+
+message RegisterOrInitializeRequest {
+  int64 user_id = 1;
+  string account_type = 2;
+  string register_source = 3;
+  string trace_id = 4;
+}
+
+message RegisterOrInitializeResponse {
+  bool success = 1;
+  int32 code = 2;
+  string message = 3;
+}

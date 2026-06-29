@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package dating.user.v1;
+
+option java_multiple_files = true;
+option java_package = "site.jianjiange.mobilegateway.grpc.user";
+option java_outer_classname = "UserQueryProto";
+
+service UserQueryService {
+  rpc GetCurrentUser(GetCurrentUserRequest) returns (GetCurrentUserResponse);
+}
+
+message GetCurrentUserRequest {
+  int64 user_id = 1;
+  string trace_id = 2;
+}
+
+message GetCurrentUserResponse {
+  int64 user_id = 1;
+  string nickname = 2;
+  string avatar_url = 3;
+  string bio = 4;
+}

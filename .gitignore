@@ -2,6 +2,8 @@
 .claude/
 ai-chat/
 proto/
+!dating-server/mobile-gateway/src/main/proto/
+!dating-server/mobile-gateway/src/main/proto/*.proto
 docker-compose.app.yml
 dating-server/docs/
 dating-server/.gitkeep
